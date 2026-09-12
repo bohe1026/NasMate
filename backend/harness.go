@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 )
 
 // Harness keeps planning, policy and tool execution separate. Tool inputs are
@@ -31,19 +34,33 @@ type AgentPlan struct {
 
 type Harness struct {
 	Tools []ToolSpec
+	model ModelProvider
+}
+
+type ModelProvider interface {
+	Plan(context.Context, string, []ToolSpec) (AgentPlan, error)
 }
 
 func NewHarness() *Harness {
-	return &Harness{Tools: []ToolSpec{
+	h := &Harness{Tools: []ToolSpec{
 		{Name: "search_files", Description: "搜索授权目录中的文件元数据", ReadOnly: true},
 		{Name: "storage_usage", Description: "读取授权目录和文件系统容量", ReadOnly: true},
 		{Name: "inspect_containers", Description: "读取 Docker 容器状态和受限日志", ReadOnly: true},
 		{Name: "backup_status", Description: "读取备份状态和恢复有效性", ReadOnly: true},
 		{Name: "prepare_download", Description: "生成下载计划并等待用户确认", ReadOnly: false},
 	}}
+	if key := os.Getenv("DEEPSEEK_API_KEY"); key != "" {
+		h.model = OpenAICompatibleProvider{BaseURL: envOr("LLM_BASE_URL", "https://api.deepseek.com"), APIKey: key, Model: envOr("LLM_MODEL", "deepseek-chat")}
+	}
+	return h
 }
 
 func (h *Harness) Plan(_ context.Context, prompt string) AgentPlan {
+	if h.model != nil {
+		if plan, err := h.model.Plan(context.Background(), prompt, h.Tools); err == nil && validPlan(plan, h.Tools) {
+			return plan
+		}
+	}
 	prompt = strings.TrimSpace(prompt)
 	steps := make([]PlanStep, 0, 2)
 	switch {
@@ -59,6 +76,75 @@ func (h *Harness) Plan(_ context.Context, prompt string) AgentPlan {
 		steps = append(steps, PlanStep{Tool: "search_files", Reason: "默认从授权范围内的元数据搜索开始"})
 	}
 	return AgentPlan{Status: "success", Summary: "已生成受策略约束的工具计划", NextActions: []string{"查看工具计划", "需要写入时等待真实用户审批"}, Artifacts: []string{}, Steps: steps}
+}
+
+func validPlan(plan AgentPlan, tools []ToolSpec) bool {
+	if plan.Status != "success" || len(plan.Steps) == 0 {
+		return false
+	}
+	for _, step := range plan.Steps {
+		found := false
+		for _, tool := range tools {
+			if step.Tool == tool.Name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+type OpenAICompatibleProvider struct{ BaseURL, APIKey, Model string }
+
+func (p OpenAICompatibleProvider) Plan(ctx context.Context, prompt string, tools []ToolSpec) (AgentPlan, error) {
+	type request struct {
+		Model          string              `json:"model"`
+		Messages       []map[string]string `json:"messages"`
+		Temperature    int                 `json:"temperature"`
+		ResponseFormat map[string]string   `json:"response_format"`
+	}
+	schema := `{"status":"success","summary":"...","next_actions":["..."],"artifacts":[],"steps":[{"tool":"search_files","reason":"..."}]}`
+	body, _ := json.Marshal(request{Model: p.Model, Temperature: 0, ResponseFormat: map[string]string{"type": "json_object"}, Messages: []map[string]string{{"role": "system", "content": "Return only JSON matching this shape: " + schema + ". Allowed tools: " + toolNames(tools)}, {"role": "user", "content": prompt}}})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.BaseURL, "/")+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return AgentPlan{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+p.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return AgentPlan{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return AgentPlan{}, fmt.Errorf("model status %d", resp.StatusCode)
+	}
+	var envelope struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil || len(envelope.Choices) == 0 {
+		return AgentPlan{}, fmt.Errorf("invalid model response")
+	}
+	var plan AgentPlan
+	if err := json.Unmarshal([]byte(envelope.Choices[0].Message.Content), &plan); err != nil {
+		return AgentPlan{}, err
+	}
+	return plan, nil
+}
+func toolNames(tools []ToolSpec) string {
+	names := make([]string, len(tools))
+	for i, t := range tools {
+		names[i] = t.Name
+	}
+	return strings.Join(names, ",")
 }
 
 func (h *Harness) HandlePlan(w http.ResponseWriter, r *http.Request) {
