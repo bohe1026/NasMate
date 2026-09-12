@@ -16,6 +16,7 @@ rootfs_amd64/bin/ugreen-ai-backend
 rootfs_arm64/bin/ugreen-ai-backend
 build_dir/
 public/version.json
+tools/
 
 # Editor directories and files
 .vscode/*
