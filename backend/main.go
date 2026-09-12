@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -192,6 +193,8 @@ type DownloadPlan struct {
 	Status          string           `json:"status"`
 	CreatedAt       time.Time        `json:"createdAt"`
 	ApprovedAt      *time.Time       `json:"approvedAt,omitempty"`
+	DownloadedBytes int64            `json:"downloadedBytes"`
+	CurrentSource   string           `json:"currentSource,omitempty"`
 	User            User             `json:"user"`
 }
 
@@ -907,7 +910,99 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 		eventType = "approval.denied"
 	}
 	s.store.appendEvent(id, eventType, map[string]string{"userId": user.ID})
+	if action == "approve" {
+		go s.executeDownload(id)
+	}
 	writeJSON(w, http.StatusOK, &planCopy)
+}
+
+func (s *Server) executeDownload(id string) {
+	s.store.mu.RLock()
+	plan, ok := s.store.downloads[id]
+	if !ok {
+		s.store.mu.RUnlock()
+		return
+	}
+	copyPlan := *plan
+	s.store.mu.RUnlock()
+	for _, source := range copyPlan.Sources {
+		parsed, err := url.Parse(source.URL)
+		if err != nil {
+			s.failDownload(id, err)
+			return
+		}
+		name := filepath.Base(parsed.Path)
+		if name == "." || name == "/" || name == "" {
+			name = "download-" + newID("file")
+		}
+		path := filepath.Join(copyPlan.TargetDirectory, name)
+		if _, err := s.resolveAuthorizedPath(path); err != nil {
+			s.failDownload(id, errForbidden)
+			return
+		}
+		s.updateDownload(id, 0, source.Title)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, source.URL, nil)
+		if err != nil {
+			s.failDownload(id, err)
+			return
+		}
+		resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
+		if err != nil {
+			s.failDownload(id, err)
+			return
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			resp.Body.Close()
+			s.failDownload(id, fmt.Errorf("download status %d", resp.StatusCode))
+			return
+		}
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		if err != nil {
+			resp.Body.Close()
+			s.failDownload(id, err)
+			return
+		}
+		written, copyErr := io.Copy(file, io.LimitReader(resp.Body, 10<<30+1))
+		if written > 10<<30 {
+			copyErr = fmt.Errorf("download exceeds 10GB limit")
+		}
+		file.Close()
+		resp.Body.Close()
+		if copyErr != nil {
+			s.failDownload(id, copyErr)
+			return
+		}
+		s.updateDownload(id, written, "")
+	}
+	s.store.mu.Lock()
+	if plan, ok := s.store.downloads[id]; ok {
+		plan.Status = statusCompleted
+		plan.CurrentSource = ""
+	}
+	s.store.mu.Unlock()
+	s.store.persist()
+	s.store.appendEvent(id, "task.progress", map[string]string{"status": statusCompleted, "summary": "下载完成"})
+}
+
+func (s *Server) updateDownload(id string, bytes int64, source string) {
+	s.store.mu.Lock()
+	if plan, ok := s.store.downloads[id]; ok {
+		plan.DownloadedBytes += bytes
+		plan.CurrentSource = source
+	}
+	s.store.mu.Unlock()
+	s.store.persist()
+	s.store.appendEvent(id, "task.progress", map[string]any{"downloadedBytes": bytes, "currentSource": source})
+}
+func (s *Server) failDownload(id string, err error) {
+	s.store.mu.Lock()
+	if plan, ok := s.store.downloads[id]; ok {
+		plan.Status = statusFailed
+		plan.CurrentSource = ""
+	}
+	s.store.mu.Unlock()
+	s.store.persist()
+	s.store.appendEvent(id, "task.progress", map[string]string{"status": statusFailed, "summary": "下载失败", "reason": err.Error()})
 }
 
 func (s *Server) authorizePath(candidate string) bool {
