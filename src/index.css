@@ -1,0 +1,5 @@
+:root { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #e8eee8; background: #111514; font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button, textarea { font: inherit; }
+button { border: 0; cursor: pointer; }

@@ -1,0 +1,30 @@
+spec_version: "2.1"
+app_id: com.ugreen.aiworkbench
+version: 0.1.0
+support_arch:
+  - amd64
+  - arm64
+product_series:
+  - nasync
+supports:
+  - app
+  - pc
+start_cmd: bin/ugreen-ai-backend
+port: 21010
+proxy_path: api
+open_type: inner
+tag_types:
+  - utility
+  - devtool
+depend_fw_version: 1.13.0.0000
+allow_add_access_path: true
+only_admin: false
+i18n:
+  en-US:
+    name: NasMate
+    description: A local-first AI workbench for safe NAS operations.
+    author: NasMate
+  zh-CN:
+    name: NasMate
+    description: 面向 NAS 的本地优先、安全可审计 AI 工作台。
+    author: NasMate
