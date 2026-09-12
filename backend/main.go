@@ -459,6 +459,7 @@ type Server struct {
 	storage StorageProvider
 	docker  DockerProvider
 	backup  BackupProvider
+	harness *Harness
 }
 
 func NewServer(config Config) *Server {
@@ -468,7 +469,7 @@ func NewServer(config Config) *Server {
 		docker = MockDocker{}
 		backup = MockBackup{}
 	}
-	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup}
+	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness()}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -490,6 +491,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "api/tasks":
 		s.handleTasks(w, r)
+	case path == "api/agent/plan":
+		s.harness.HandlePlan(w, r)
 	case strings.HasPrefix(path, "api/tasks/"):
 		s.handleTask(w, r, strings.TrimPrefix(path, "api/tasks/"))
 	case path == "api/storage/usage":
@@ -570,14 +573,15 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		now := time.Now().UTC()
-		task := &Task{ID: newID("task"), Prompt: strings.TrimSpace(req.Prompt), Status: statusRunning, Summary: "已生成只读执行计划，正在等待工具结果", CreatedAt: now, UpdatedAt: now, User: user}
+		plan := s.harness.Plan(r.Context(), strings.TrimSpace(req.Prompt))
+		task := &Task{ID: newID("task"), Prompt: strings.TrimSpace(req.Prompt), Status: statusRunning, Summary: plan.Summary, CreatedAt: now, UpdatedAt: now, User: user}
 		s.store.mu.Lock()
 		s.store.tasks[task.ID] = task
 		s.store.mu.Unlock()
 		s.store.persist()
 		s.store.appendEvent(task.ID, "session.created", map[string]string{"userId": user.ID})
 		s.store.appendEvent(task.ID, "user.message", map[string]string{"prompt": task.Prompt})
-		s.store.appendEvent(task.ID, "agent.plan", map[string]any{"mode": "read-only", "scope": s.config.SharedRoots})
+		s.store.appendEvent(task.ID, "agent.plan", map[string]any{"mode": "policy-constrained", "scope": s.config.SharedRoots, "plan": plan})
 		s.store.appendEvent(task.ID, "task.progress", map[string]string{"message": "已完成权限检查"})
 		writeJSON(w, http.StatusCreated, task)
 	default:
