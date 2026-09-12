@@ -49,11 +49,11 @@ func TestCreateTaskAndEvents(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&task); err != nil {
 		t.Fatal(err)
 	}
-	if task.ID == "" || task.Status != statusRunning {
+	if task.ID == "" || task.Status != statusCompleted {
 		t.Fatalf("unexpected task: %+v", task)
 	}
-	if len(server.store.events[task.ID]) != 4 {
-		t.Fatalf("expected four durable events, got %d", len(server.store.events[task.ID]))
+	if len(server.store.events[task.ID]) != 7 {
+		t.Fatalf("expected seven durable events, got %d", len(server.store.events[task.ID]))
 	}
 }
 
@@ -305,7 +305,7 @@ func TestStorePersistsTasksAndEvents(t *testing.T) {
 	if len(body.Items) != 1 || body.Items[0].ID != created.ID {
 		t.Fatalf("task was not restored: %+v", body.Items)
 	}
-	if len(restarted.store.events[created.ID]) != 4 {
+	if len(restarted.store.events[created.ID]) != 7 {
 		t.Fatalf("events were not restored: %+v", restarted.store.events[created.ID])
 	}
 }

@@ -583,9 +583,56 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		s.store.appendEvent(task.ID, "user.message", map[string]string{"prompt": task.Prompt})
 		s.store.appendEvent(task.ID, "agent.plan", map[string]any{"mode": "policy-constrained", "scope": s.config.SharedRoots, "plan": plan})
 		s.store.appendEvent(task.ID, "task.progress", map[string]string{"message": "已完成权限检查"})
+		// Execute read-only plans before responding so persisted state is durable
+		// when a caller immediately restarts the application.
+		s.executeTask(task.ID, task.Prompt, plan)
 		writeJSON(w, http.StatusCreated, task)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+	}
+}
+
+func (s *Server) executeTask(id, prompt string, plan AgentPlan) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if len(plan.Steps) == 0 || plan.Steps[0].Tool == "prepare_download" {
+		return
+	}
+	step := plan.Steps[0]
+	s.store.appendEvent(id, "tool.call", map[string]any{"name": step.Tool, "input": map[string]string{"prompt": prompt}})
+	var result any
+	var err error
+	switch step.Tool {
+	case "storage_usage":
+		result, err = s.storage.Usage(ctx)
+	case "inspect_containers":
+		result, err = s.docker.List(ctx)
+	case "backup_status":
+		result, err = s.backup.Status(ctx)
+	default:
+		result, err = s.storage.Search(ctx, FileSearchOptions{Keyword: prompt, MaxResults: 100})
+	}
+	if err != nil {
+		s.store.appendEvent(id, "tool.result", map[string]any{"status": "error", "summary": "工具不可用", "next_actions": []string{"检查授权目录或系统能力后重试"}})
+		s.finishTask(id, statusFailed, "工具执行失败：请检查授权范围或系统能力")
+		return
+	}
+	s.store.appendEvent(id, "tool.result", map[string]any{"status": "success", "summary": "工具执行完成", "next_actions": []string{"查看结果"}, "artifacts": []string{}, "result": result})
+	s.finishTask(id, statusCompleted, "只读工具执行完成，可查看执行轨迹")
+}
+
+func (s *Server) finishTask(id, status, summary string) {
+	s.store.mu.Lock()
+	task, ok := s.store.tasks[id]
+	if ok {
+		task.Status = status
+		task.Summary = summary
+		task.UpdatedAt = time.Now().UTC()
+	}
+	s.store.mu.Unlock()
+	if ok {
+		s.store.persist()
+		s.store.appendEvent(id, "task.progress", map[string]string{"status": status, "summary": summary})
 	}
 }
 
