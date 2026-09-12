@@ -14,6 +14,8 @@ dist-ssr
 rootfs_common/www/
 rootfs_amd64/bin/ugreen-ai-backend
 rootfs_arm64/bin/ugreen-ai-backend
+build_dir/
+public/version.json
 
 # Editor directories and files
 .vscode/*
