@@ -1193,17 +1193,32 @@ func (s *Server) executeDownload(ctx context.Context, id string) {
 			return
 		}
 		s.updateDownload(id, 0, source.Title)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, nil)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
+		var resp *http.Response
+		var requestErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, nil)
+			if err != nil {
+				requestErr = err
+				break
+			}
+			resp, requestErr = (&http.Client{Timeout: 60 * time.Second}).Do(req)
+			if requestErr == nil || errors.Is(requestErr, context.Canceled) {
+				break
+			}
+			if attempt < 3 {
+				s.store.appendEvent(id, "task.retry", map[string]any{"source": source.Title, "attempt": attempt + 1})
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Duration(attempt) * 100 * time.Millisecond):
+				}
+			}
+		}
+		if requestErr != nil {
+			if errors.Is(requestErr, context.Canceled) {
 				return
 			}
-			s.failDownload(id, err)
-			return
-		}
-		resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
-		if err != nil {
-			s.failDownload(id, err)
+			s.failDownload(id, requestErr)
 			return
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
