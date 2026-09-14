@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -62,7 +63,44 @@ func (s *Server) persistHealthReport(report HealthReport) error {
 		return err
 	}
 	path := filepath.Join(s.config.DataDir, fmt.Sprintf("health-report-%s.json", report.GeneratedAt.Format("20060102-150405")))
-	return os.WriteFile(path, data, 0600)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return err
+	}
+	return s.pruneHealthReports(30)
+}
+
+func (s *Server) pruneHealthReports(keep int) error {
+	if keep < 1 || s.config.DataDir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(s.config.DataDir)
+	if err != nil {
+		return err
+	}
+	type reportFile struct {
+		name string
+		mod  time.Time
+	}
+	files := make([]reportFile, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "health-report-") || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		info, err := entry.Info()
+		if err == nil {
+			files = append(files, reportFile{name: entry.Name(), mod: info.ModTime()})
+		}
+	}
+	if len(files) <= keep {
+		return nil
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
+	for _, file := range files[:len(files)-keep] {
+		if err := os.Remove(filepath.Join(s.config.DataDir, file.name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {

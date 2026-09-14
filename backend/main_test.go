@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -209,6 +210,44 @@ func TestRecoveryPlanIsReadOnlyAndRequiresApproval(t *testing.T) {
 	}
 	if !plan.ReadOnly || !plan.RequiresApproval || plan.WillOverwrite || len(plan.Steps) == 0 {
 		t.Fatalf("unsafe recovery plan: %+v", plan)
+	}
+}
+
+func TestHealthReportsPruneOldArtifactsOnly(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "data")
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		name := filepath.Join(dataDir, fmt.Sprintf("health-report-2026010%d-000000.json", i+1))
+		if err := os.WriteFile(name, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep := filepath.Join(dataDir, "state.json")
+	if err := os.WriteFile(keep, []byte("state"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(Config{DataDir: dataDir})
+	if err := server.pruneHealthReports(2); err != nil {
+		t.Fatal(err)
+	}
+	items, err := os.ReadDir(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, item := range items {
+		if strings.HasPrefix(item.Name(), "health-report-") {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("expected two reports retained, got %d", count)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("non-report file was removed: %v", err)
 	}
 }
 
