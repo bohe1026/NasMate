@@ -115,6 +115,27 @@ func TestModelStatusDoesNotExposeCredentials(t *testing.T) {
 	}
 }
 
+func TestGenerateHealthReportPersistsArtifact(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: filepath.Join(root, "data"), MaxBodyBytes: 1 << 20})
+	res := request(t, server, http.MethodPost, "/api/reports/health/generate", "")
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected report creation, got %d: %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Artifact string `json:"artifact"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Artifact == "" {
+		t.Fatal("expected persisted report artifact path")
+	}
+	if _, err := os.Stat(body.Artifact); err != nil {
+		t.Fatalf("report artifact not persisted: %v", err)
+	}
+}
+
 func TestExecuteTaskRunsMultipleReadOnlySteps(t *testing.T) {
 	server := testServer()
 	now := time.Now().UTC()

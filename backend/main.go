@@ -527,6 +527,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleOrganizeDryRun(w, r)
 	case path == "api/reports/health":
 		s.handleHealthReport(w, r)
+	case path == "api/reports/health/generate":
+		s.handleGenerateHealthReport(w, r)
 	case strings.HasPrefix(path, "api/tasks/"):
 		s.handleTask(w, r, strings.TrimPrefix(path, "api/tasks/"))
 	case path == "api/storage/usage":

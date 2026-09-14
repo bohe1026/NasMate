@@ -1,7 +1,11 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -20,6 +24,33 @@ func (s *Server) handleHealthReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
 		return
 	}
+	report := s.buildHealthReport(r)
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) handleGenerateHealthReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+		return
+	}
+	report := s.buildHealthReport(r)
+	artifact := ""
+	if s.config.DataDir != "" {
+		if err := os.MkdirAll(s.config.DataDir, 0700); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "无法保存健康报告")
+			return
+		}
+		artifact = filepath.Join(s.config.DataDir, fmt.Sprintf("health-report-%s.json", report.GeneratedAt.Format("20060102-150405")))
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil || os.WriteFile(artifact, data, 0600) != nil {
+			writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "无法保存健康报告")
+			return
+		}
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"status": "success", "summary": "健康报告已生成", "artifact": artifact, "report": report, "readOnly": true})
+}
+
+func (s *Server) buildHealthReport(r *http.Request) HealthReport {
 	report := HealthReport{GeneratedAt: time.Now().UTC(), Warnings: []string{}, ReadOnly: true}
 	if storage, err := s.storage.Usage(r.Context()); err == nil {
 		report.Storage = &storage
@@ -43,5 +74,5 @@ func (s *Server) handleHealthReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.store.mu.RUnlock()
-	writeJSON(w, http.StatusOK, report)
+	return report
 }
