@@ -545,6 +545,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleGenerateHealthReport(w, r)
 	case path == "api/artifacts":
 		s.handleArtifacts(w, r)
+	case strings.HasPrefix(path, "api/artifacts/"):
+		s.handleArtifact(w, r, strings.TrimPrefix(path, "api/artifacts/"))
 	case strings.HasPrefix(path, "api/tasks/"):
 		s.handleTask(w, r, strings.TrimPrefix(path, "api/tasks/"))
 	case path == "api/storage/usage":

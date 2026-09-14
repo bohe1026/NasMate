@@ -134,6 +134,14 @@ func TestGenerateHealthReportPersistsArtifact(t *testing.T) {
 	if _, err := os.Stat(body.Artifact); err != nil {
 		t.Fatalf("report artifact not persisted: %v", err)
 	}
+	res = request(t, server, http.MethodGet, "/api/artifacts/"+filepath.Base(body.Artifact), "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "readOnly") {
+		t.Fatalf("expected artifact read, got %d: %s", res.Code, res.Body.String())
+	}
+	res = request(t, server, http.MethodGet, "/api/artifacts/../state.json", "")
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("expected traversal artifact rejection, got %d", res.Code)
+	}
 	res = request(t, server, http.MethodGet, "/api/artifacts", "")
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "health-report-") {
 		t.Fatalf("expected artifact listing, got %d: %s", res.Code, res.Body.String())
