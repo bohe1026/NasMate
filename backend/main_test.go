@@ -57,6 +57,56 @@ func TestCreateTaskAndEvents(t *testing.T) {
 	}
 }
 
+func TestCancelFinishedTaskIsRejected(t *testing.T) {
+	server := testServer()
+	res := request(t, server, http.MethodPost, "/api/tasks", `{"prompt":"检查 NAS 空间"}`)
+	var task Task
+	if err := json.NewDecoder(res.Body).Decode(&task); err != nil {
+		t.Fatal(err)
+	}
+	res = request(t, server, http.MethodPost, "/api/tasks/"+task.ID+"/cancel", "")
+	if res.Code != http.StatusConflict {
+		t.Fatalf("expected finished task cancellation to be rejected, got %d: %s", res.Code, res.Body.String())
+	}
+}
+
+func TestExecuteTaskRunsMultipleReadOnlySteps(t *testing.T) {
+	server := testServer()
+	now := time.Now().UTC()
+	task := &Task{ID: "multi-step", Prompt: "检查 NAS", Status: statusRunning, CreatedAt: now, UpdatedAt: now, User: User{ID: "dev-user"}}
+	server.store.tasks[task.ID] = task
+	server.executeTask(task.ID, task.Prompt, AgentPlan{Status: "success", Steps: []PlanStep{
+		{Tool: "storage_usage", Reason: "容量"},
+		{Tool: "inspect_containers", Reason: "容器"},
+	}})
+	events := server.store.events[task.ID]
+	toolCalls := 0
+	for _, event := range events {
+		if event.Type == "tool.call" {
+			toolCalls++
+		}
+	}
+	if toolCalls != 2 {
+		t.Fatalf("expected two tool calls, got %d", toolCalls)
+	}
+	if server.store.tasks[task.ID].Status != statusCompleted {
+		t.Fatalf("expected completed task, got %s", server.store.tasks[task.ID].Status)
+	}
+}
+
+func TestExtractSearchKeyword(t *testing.T) {
+	tests := map[string]string{
+		"搜索装修方案文件": "装修方案",
+		"查找报告":     "报告",
+		"找出家庭照片":   "家庭照片",
+	}
+	for input, want := range tests {
+		if got := extractSearchKeyword(input); got != want {
+			t.Errorf("extractSearchKeyword(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestDownloadRequiresAuthorizedPathAndApproval(t *testing.T) {
 	server := testServer()
 	body := `{"targetDirectory":"/tmp/not-authorized","sources":[{"title":"demo","url":"https://example.com/demo.jpg","license":"CC BY","sizeBytes":100}]}`

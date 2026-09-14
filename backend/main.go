@@ -457,12 +457,14 @@ func (MockBackup) Status(context.Context) (BackupStatus, error) {
 }
 
 type Server struct {
-	config  Config
-	store   *Store
-	storage StorageProvider
-	docker  DockerProvider
-	backup  BackupProvider
-	harness *Harness
+	config       Config
+	store        *Store
+	storage      StorageProvider
+	docker       DockerProvider
+	backup       BackupProvider
+	harness      *Harness
+	downloadMu   sync.Mutex
+	downloadsCtx map[string]context.CancelFunc
 }
 
 func NewServer(config Config) *Server {
@@ -472,7 +474,7 @@ func NewServer(config Config) *Server {
 		docker = MockDocker{}
 		backup = MockBackup{}
 	}
-	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness()}
+	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness(), downloadsCtx: make(map[string]context.CancelFunc)}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -602,30 +604,67 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) executeTask(id, prompt string, plan AgentPlan) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if len(plan.Steps) == 0 || plan.Steps[0].Tool == "prepare_download" {
+	if len(plan.Steps) == 0 {
 		return
 	}
-	step := plan.Steps[0]
-	s.store.appendEvent(id, "tool.call", map[string]any{"name": step.Tool, "input": map[string]string{"prompt": prompt}})
-	var result any
-	var err error
-	switch step.Tool {
-	case "storage_usage":
-		result, err = s.storage.Usage(ctx)
-	case "inspect_containers":
-		result, err = s.docker.List(ctx)
-	case "backup_status":
-		result, err = s.backup.Status(ctx)
-	default:
-		result, err = s.storage.Search(ctx, FileSearchOptions{Keyword: prompt, MaxResults: 100})
+	readOnlySteps := 0
+	for _, step := range plan.Steps {
+		if step.Tool != "prepare_download" {
+			readOnlySteps++
+		}
 	}
-	if err != nil {
-		s.store.appendEvent(id, "tool.result", map[string]any{"status": "error", "summary": "工具不可用", "next_actions": []string{"检查授权目录或系统能力后重试"}})
-		s.finishTask(id, statusFailed, "工具执行失败：请检查授权范围或系统能力")
+	if readOnlySteps == 0 {
+		s.finishTask(id, statusPending, "已生成下载计划，等待用户确认")
 		return
 	}
-	s.store.appendEvent(id, "tool.result", map[string]any{"status": "success", "summary": "工具执行完成", "next_actions": []string{"查看结果"}, "artifacts": []string{}, "result": result})
+	for index, step := range plan.Steps {
+		// Keep the execution budget bounded even if a provider returns an
+		// unexpectedly large plan. Only registered tools can reach this switch.
+		if index >= 3 {
+			s.store.appendEvent(id, "task.progress", map[string]any{"status": "warning", "summary": "已达到单任务工具调用上限", "next_actions": []string{"拆分任务后重试"}})
+			break
+		}
+		if step.Tool == "prepare_download" {
+			// Planning a write is intentionally separated from execution. The
+			// download approval endpoint is the only path that can start it.
+			continue
+		}
+		s.store.appendEvent(id, "tool.call", map[string]any{"name": step.Tool, "input": map[string]string{"prompt": prompt}})
+		result, err := s.executeReadOnlyTool(ctx, step.Tool, prompt)
+		if err != nil {
+			s.store.appendEvent(id, "tool.result", map[string]any{"status": "error", "summary": "工具不可用", "next_actions": []string{"检查授权目录或系统能力后重试"}})
+			s.finishTask(id, statusFailed, "工具执行失败：请检查授权范围或系统能力")
+			return
+		}
+		s.store.appendEvent(id, "tool.result", map[string]any{"status": "success", "summary": "工具执行完成", "next_actions": []string{"查看结果"}, "artifacts": []string{}, "result": result})
+	}
 	s.finishTask(id, statusCompleted, "只读工具执行完成，可查看执行轨迹")
+}
+
+func (s *Server) executeReadOnlyTool(ctx context.Context, name, prompt string) (any, error) {
+	switch name {
+	case "storage_usage":
+		return s.storage.Usage(ctx)
+	case "inspect_containers":
+		return s.docker.List(ctx)
+	case "backup_status":
+		return s.backup.Status(ctx)
+	case "search_files":
+		return s.storage.Search(ctx, FileSearchOptions{Keyword: extractSearchKeyword(prompt), MaxResults: 100})
+	default:
+		return nil, fmt.Errorf("unknown tool %q: %w", name, errInvalidInput)
+	}
+}
+
+func extractSearchKeyword(prompt string) string {
+	value := strings.TrimSpace(prompt)
+	for _, prefix := range []string{"搜索", "查找", "寻找", "找出", "找"} {
+		value = strings.TrimSpace(strings.TrimPrefix(value, prefix))
+	}
+	for _, suffix := range []string{"文件", "资料", "文档"} {
+		value = strings.TrimSpace(strings.TrimSuffix(value, suffix))
+	}
+	return value
 }
 
 func (s *Server) finishTask(id, status, summary string) {
@@ -680,6 +719,11 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 			return
 		}
 		s.store.mu.Lock()
+		if task.Status == statusCompleted || task.Status == statusFailed || task.Status == statusCancelled {
+			s.store.mu.Unlock()
+			writeError(w, http.StatusConflict, "VALIDATION_FAILED", "任务已经结束，不能重复取消")
+			return
+		}
 		task.Status = statusCancelled
 		task.UpdatedAt = time.Now().UTC()
 		taskCopy = *task
@@ -888,11 +932,34 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 		writeJSON(w, http.StatusOK, &planCopy)
 		return
 	}
-	if r.Method != http.MethodPost || (r.URL.Query().Get("action") != "approve" && r.URL.Query().Get("action") != "deny") {
-		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "请使用 action=approve 或 action=deny")
+	if r.Method != http.MethodPost || (r.URL.Query().Get("action") != "approve" && r.URL.Query().Get("action") != "deny" && r.URL.Query().Get("action") != "cancel") {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "请使用 action=approve、deny 或 cancel")
 		return
 	}
 	action := r.URL.Query().Get("action")
+	if action == "cancel" {
+		if planCopy.Status != statusRunning && planCopy.Status != statusPending {
+			writeError(w, http.StatusConflict, "VALIDATION_FAILED", "当前下载任务不能取消")
+			return
+		}
+		s.downloadMu.Lock()
+		if cancel, exists := s.downloadsCtx[id]; exists {
+			cancel()
+			delete(s.downloadsCtx, id)
+		}
+		s.downloadMu.Unlock()
+		s.store.mu.Lock()
+		if current, exists := s.store.downloads[id]; exists && (current.Status == statusPending || current.Status == statusRunning) {
+			current.Status = statusCancelled
+			current.CurrentSource = ""
+			planCopy = *current
+		}
+		s.store.mu.Unlock()
+		s.store.persist()
+		s.store.appendEvent(id, "task.cancelled", map[string]string{"userId": user.ID, "kind": "download"})
+		writeJSON(w, http.StatusOK, &planCopy)
+		return
+	}
 	s.store.mu.Lock()
 	if plan.Status != statusPending {
 		s.store.mu.Unlock()
@@ -915,12 +982,16 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 	}
 	s.store.appendEvent(id, eventType, map[string]string{"userId": user.ID})
 	if action == "approve" {
-		go s.executeDownload(id)
+		ctx, cancel := context.WithCancel(context.Background())
+		s.downloadMu.Lock()
+		s.downloadsCtx[id] = cancel
+		s.downloadMu.Unlock()
+		go s.executeDownload(ctx, id)
 	}
 	writeJSON(w, http.StatusOK, &planCopy)
 }
 
-func (s *Server) executeDownload(id string) {
+func (s *Server) executeDownload(ctx context.Context, id string) {
 	s.store.mu.RLock()
 	plan, ok := s.store.downloads[id]
 	if !ok {
@@ -930,6 +1001,9 @@ func (s *Server) executeDownload(id string) {
 	copyPlan := *plan
 	s.store.mu.RUnlock()
 	for _, source := range copyPlan.Sources {
+		if err := ctx.Err(); err != nil {
+			return
+		}
 		parsed, err := url.Parse(source.URL)
 		if err != nil {
 			s.failDownload(id, err)
@@ -945,7 +1019,7 @@ func (s *Server) executeDownload(id string) {
 			return
 		}
 		s.updateDownload(id, 0, source.Title)
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, source.URL, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, nil)
 		if err != nil {
 			s.failDownload(id, err)
 			return
@@ -978,6 +1052,9 @@ func (s *Server) executeDownload(id string) {
 		}
 		s.updateDownload(id, written, "")
 	}
+	s.downloadMu.Lock()
+	delete(s.downloadsCtx, id)
+	s.downloadMu.Unlock()
 	s.store.mu.Lock()
 	if plan, ok := s.store.downloads[id]; ok {
 		plan.Status = statusCompleted
