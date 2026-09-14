@@ -16,6 +16,7 @@ type DownloadPlan = { id: string; targetDirectory: string; sources: { title: str
 type TaskEvent = { id: number; type: string; data?: unknown }
 type Artifact = { name: string; path: string; sizeBytes: number; createdAt: string }
 type ModelStatus = { provider: string; model: string; configured: boolean; mode: string }
+type IndexStatus = { mode: string; bodyIndexEnabled: boolean; ocrEnabled: boolean; mediaTranscriptionEnabled: boolean }
 const themes = [{ name: '鸢尾紫', color: '#7363df' }, { name: '晴空蓝', color: '#437acb' }, { name: '松石绿', color: '#278375' }, { name: '暖杏橙', color: '#b86c3c' }, { name: '玫瑰粉', color: '#b76187' }]
 const capabilities = [
   { title: '文件搜索', description: '不记得放哪了？从文件名找起。', prompt: '搜索授权目录中的文件', icon: FileSearch, tone: 'blue', tag: '文件元数据' },
@@ -61,6 +62,7 @@ function App() {
   const [eventsState, setEventsState] = useState('idle')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null)
+  const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const appearance = useRef<HTMLDialogElement>(null)
   const permissions = useRef<HTMLDialogElement>(null)
@@ -78,6 +80,7 @@ function App() {
     void apiFetch('/api/downloads').then(readJSON<{ items: DownloadPlan[] }>).then((data) => { if (live) { setPlans(data.items ?? []); setPlansState('ready') } }).catch(() => { if (live) setPlansState('error') })
     void apiFetch('/api/artifacts').then(readJSON<{ items: Artifact[] }>).then((data) => { if (live) setArtifacts(data.items ?? []) }).catch(() => undefined)
     void apiFetch('/api/models/status').then(readJSON<ModelStatus>).then((data) => { if (live) setModelStatus(data) }).catch(() => undefined)
+    void apiFetch('/api/index/status').then(readJSON<IndexStatus>).then((data) => { if (live) setIndexStatus(data) }).catch(() => undefined)
     return () => { live = false }
   }, [])
   useEffect(() => {
@@ -171,7 +174,7 @@ function App() {
       </main>
 
       <dialog ref={appearance} className="settings-dialog" aria-labelledby="appearance-title" onClick={(event) => { if (event.target === event.currentTarget) appearance.current?.close() }}><div className="dialog-content"><header><span className="dialog-icon"><Palette size={22} /></span><button className="icon-button" autoFocus aria-label="关闭外观设置" onClick={() => appearance.current?.close()}><X size={20} /></button></header><h2 id="appearance-title">一点颜色，很像你。</h2><p>选择你喜欢的主题，让工作台多一点个人风格。</p><div className="color-options">{themes.map((theme) => <button key={theme.color} aria-label={theme.name} aria-pressed={theme.color === accent} className={theme.color === accent ? 'selected' : ''} onClick={() => setAccent(theme.color)}><span style={{ background: theme.color }}>{theme.color === accent && <Check size={19} />}</span><small>{theme.name}</small></button>)}</div><label className="custom-color"><span>或者，挑一个自己的颜色<small>仅保存在当前浏览器</small></span><input type="color" value={accent} onChange={(event) => setAccent(event.target.value)} aria-label="自定义主题颜色" /></label><div className="theme-preview"><span className="preview-dot" /><div><strong>NasMate</strong><p>把复杂留给我，把简单留给你。</p></div><ArrowUpRight size={19} /></div><button className="primary-button dialog-done" onClick={() => appearance.current?.close()}>就用这个颜色</button></div></dialog>
-      <dialog ref={permissions} className="settings-dialog" aria-labelledby="permissions-title" onClick={(event) => { if (event.target === event.currentTarget) permissions.current?.close() }}><div className="dialog-content"><header><span className="dialog-icon"><ShieldCheck size={22} /></span><button className="icon-button" autoFocus aria-label="关闭权限说明" onClick={() => permissions.current?.close()}><X size={20} /></button></header><h2 id="permissions-title">你的文件，你做主。</h2><p>NasMate 通过 UGOS 获取已授权的文件夹。请在 UGOS 应用设置中管理目录授权。</p><ul className="permission-list"><li><Check size={16} />默认读取文件名和元数据</li><li><Check size={16} />下载写入前需要你确认</li><li><Check size={16} />不开放任意系统命令和自动删除</li></ul><button className="primary-button dialog-done" onClick={() => permissions.current?.close()}>知道了</button></div></dialog>
+      <dialog ref={permissions} className="settings-dialog" aria-labelledby="permissions-title" onClick={(event) => { if (event.target === event.currentTarget) permissions.current?.close() }}><div className="dialog-content"><header><span className="dialog-icon"><ShieldCheck size={22} /></span><button className="icon-button" autoFocus aria-label="关闭权限说明" onClick={() => permissions.current?.close()}><X size={20} /></button></header><h2 id="permissions-title">你的文件，你做主。</h2><p>NasMate 通过 UGOS 获取已授权的文件夹。请在 UGOS 应用设置中管理目录授权。</p><ul className="permission-list"><li><Check size={16} />默认读取文件名和元数据</li><li><Check size={16} />下载写入前需要你确认</li><li><Check size={16} />不开放任意系统命令和自动删除</li>{indexStatus && <li><Check size={16} />正文索引、OCR、音视频转写默认关闭</li>}</ul><button className="primary-button dialog-done" onClick={() => permissions.current?.close()}>知道了</button></div></dialog>
     </div>
   )
 }
