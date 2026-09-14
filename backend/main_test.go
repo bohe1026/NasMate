@@ -124,6 +124,26 @@ func TestIndexStatusIsMetadataOnly(t *testing.T) {
 	}
 }
 
+func TestIndexRebuildPersistsMetadataOnly(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(root, "data")
+	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: dataDir, MaxBodyBytes: 1 << 20})
+	res := request(t, server, http.MethodPost, "/api/index/rebuild", "")
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected index rebuild, got %d: %s", res.Code, res.Body.String())
+	}
+	data, err := os.ReadFile(filepath.Join(dataDir, "metadata-index.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "metadata-only") || strings.Contains(string(data), "content") {
+		t.Fatalf("index contains non-metadata content: %s", data)
+	}
+}
+
 func TestGenerateHealthReportPersistsArtifact(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: filepath.Join(root, "data"), MaxBodyBytes: 1 << 20})

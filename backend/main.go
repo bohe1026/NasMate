@@ -551,6 +551,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleModelStatus(w, r)
 	case path == "api/index/status":
 		s.handleIndexStatus(w, r)
+	case path == "api/index/rebuild":
+		s.handleIndexRebuild(w, r)
 	case path == "api/organize/dry-run":
 		s.handleOrganizeDryRun(w, r)
 	case path == "api/reports/health":
@@ -608,6 +610,33 @@ func (s *Server) handleIndexStatus(w http.ResponseWriter, r *http.Request) {
 		"mediaTranscriptionEnabled": false,
 		"requiresExplicitConsent":   true,
 	})
+}
+
+func (s *Server) handleIndexRebuild(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+		return
+	}
+	if s.config.DataDir == "" {
+		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "应用数据目录不可用")
+		return
+	}
+	items, err := s.storage.Search(r.Context(), FileSearchOptions{MaxResults: 100000})
+	if err != nil && !errors.Is(err, errSearchLimit) {
+		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取文件元数据")
+		return
+	}
+	path := filepath.Join(s.config.DataDir, "metadata-index.json")
+	if err := os.MkdirAll(s.config.DataDir, 0700); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "无法保存索引")
+		return
+	}
+	data, err := json.Marshal(map[string]any{"mode": "metadata-only", "generatedAt": time.Now().UTC(), "items": items})
+	if err != nil || os.WriteFile(path, data, 0600) != nil {
+		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "无法保存索引")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"status": "success", "summary": "元数据索引已重建", "artifact": path, "itemCount": len(items), "readOnly": true})
 }
 
 func (s *Server) handleValidateSources(w http.ResponseWriter, r *http.Request) {
