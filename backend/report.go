@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -17,6 +18,39 @@ type HealthReport struct {
 	FailedTasks int                   `json:"failedTasks"`
 	Warnings    []string              `json:"warnings"`
 	ReadOnly    bool                  `json:"readOnly"`
+}
+
+type Artifact struct {
+	Name      string    `json:"name"`
+	Path      string    `json:"path"`
+	SizeBytes int64     `json:"sizeBytes"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+		return
+	}
+	items := make([]Artifact, 0)
+	if s.config.DataDir != "" {
+		entries, err := os.ReadDir(s.config.DataDir)
+		if err != nil && !os.IsNotExist(err) {
+			writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "无法读取结果文件")
+			return
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasPrefix(entry.Name(), "health-report-") || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			items = append(items, Artifact{Name: entry.Name(), Path: filepath.Join(s.config.DataDir, entry.Name()), SizeBytes: info.Size(), CreatedAt: info.ModTime().UTC()})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "readOnly": true})
 }
 
 func (s *Server) handleHealthReport(w http.ResponseWriter, r *http.Request) {

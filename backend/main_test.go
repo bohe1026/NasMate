@@ -134,6 +134,10 @@ func TestGenerateHealthReportPersistsArtifact(t *testing.T) {
 	if _, err := os.Stat(body.Artifact); err != nil {
 		t.Fatalf("report artifact not persisted: %v", err)
 	}
+	res = request(t, server, http.MethodGet, "/api/artifacts", "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "health-report-") {
+		t.Fatalf("expected artifact listing, got %d: %s", res.Code, res.Body.String())
+	}
 }
 
 func TestExecuteTaskRunsMultipleReadOnlySteps(t *testing.T) {
