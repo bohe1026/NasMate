@@ -115,6 +115,14 @@ func TestModelStatusDoesNotExposeCredentials(t *testing.T) {
 	}
 }
 
+func TestIndexStatusIsMetadataOnly(t *testing.T) {
+	server := testServer()
+	res := request(t, server, http.MethodGet, "/api/index/status", "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"bodyIndexEnabled":false`) {
+		t.Fatalf("expected metadata-only index status, got %d: %s", res.Code, res.Body.String())
+	}
+}
+
 func TestGenerateHealthReportPersistsArtifact(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: filepath.Join(root, "data"), MaxBodyBytes: 1 << 20})

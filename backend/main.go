@@ -537,6 +537,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.harness.HandlePlan(w, r)
 	case path == "api/models/status":
 		s.handleModelStatus(w, r)
+	case path == "api/index/status":
+		s.handleIndexStatus(w, r)
 	case path == "api/organize/dry-run":
 		s.handleOrganizeDryRun(w, r)
 	case path == "api/reports/health":
@@ -576,6 +578,22 @@ func (s *Server) handleModelStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.harness.ModelStatus())
+}
+
+func (s *Server) handleIndexStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":                    "available",
+		"mode":                      "metadata-only",
+		"roots":                     s.config.SharedRoots,
+		"bodyIndexEnabled":          false,
+		"ocrEnabled":                false,
+		"mediaTranscriptionEnabled": false,
+		"requiresExplicitConsent":   true,
+	})
 }
 
 func (s *Server) handleValidateSources(w http.ResponseWriter, r *http.Request) {
