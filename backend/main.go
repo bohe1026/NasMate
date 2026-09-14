@@ -581,6 +581,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handlePrepareDownload(w, r)
 	case path == "api/network/sources/validate":
 		s.handleValidateSources(w, r)
+	case path == "api/network/sources/probe":
+		s.handleProbeSources(w, r)
 	case path == "api/downloads":
 		s.handleDownloads(w, r)
 	case strings.HasPrefix(path, "api/downloads/"):

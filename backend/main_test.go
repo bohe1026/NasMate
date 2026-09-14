@@ -169,6 +169,15 @@ func TestRedactSecrets(t *testing.T) {
 	}
 }
 
+func TestRejectPrivateHost(t *testing.T) {
+	if rejectPrivateHost("127.0.0.1") == nil {
+		t.Fatal("loopback host was accepted")
+	}
+	if rejectPrivateHost("192.168.1.10") == nil {
+		t.Fatal("private host was accepted")
+	}
+}
+
 func TestGenerateHealthReportPersistsArtifact(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: filepath.Join(root, "data"), MaxBodyBytes: 1 << 20})
