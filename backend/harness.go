@@ -37,6 +37,13 @@ type Harness struct {
 	model ModelProvider
 }
 
+type ModelStatus struct {
+	Provider   string `json:"provider"`
+	Model      string `json:"model"`
+	Configured bool   `json:"configured"`
+	Mode       string `json:"mode"`
+}
+
 type ModelProvider interface {
 	Plan(context.Context, string, []ToolSpec) (AgentPlan, error)
 }
@@ -53,6 +60,17 @@ func NewHarness() *Harness {
 		h.model = OpenAICompatibleProvider{BaseURL: envOr("LLM_BASE_URL", "https://api.deepseek.com"), APIKey: key, Model: envOr("LLM_MODEL", "deepseek-chat")}
 	}
 	return h
+}
+
+func (h *Harness) ModelStatus() ModelStatus {
+	if provider, ok := h.model.(OpenAICompatibleProvider); ok {
+		name := "OpenAI-compatible"
+		if strings.Contains(strings.ToLower(provider.BaseURL), "deepseek") {
+			name = "DeepSeek"
+		}
+		return ModelStatus{Provider: name, Model: provider.Model, Configured: provider.APIKey != "", Mode: "cloud"}
+	}
+	return ModelStatus{Provider: "规则规划器", Model: "builtin-policy", Configured: true, Mode: "local"}
 }
 
 func (h *Harness) Plan(_ context.Context, prompt string) AgentPlan {

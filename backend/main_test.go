@@ -103,6 +103,18 @@ func TestValidateNetworkSources(t *testing.T) {
 	}
 }
 
+func TestModelStatusDoesNotExposeCredentials(t *testing.T) {
+	server := testServer()
+	res := request(t, server, http.MethodGet, "/api/models/status", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected model status success, got %d", res.Code)
+	}
+	body := res.Body.String()
+	if strings.Contains(body, "APIKey") || strings.Contains(body, "secret") {
+		t.Fatalf("model status exposed sensitive fields: %s", body)
+	}
+}
+
 func TestExecuteTaskRunsMultipleReadOnlySteps(t *testing.T) {
 	server := testServer()
 	now := time.Now().UTC()
