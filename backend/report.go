@@ -91,6 +91,32 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "readOnly": true})
 }
 
+func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+		return
+	}
+	if s.config.DataDir == "" || name == "" || filepath.Base(name) != name || !strings.HasPrefix(name, "health-report-") || !strings.HasSuffix(name, ".json") {
+		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "结果文件不存在")
+		return
+	}
+	path := filepath.Join(s.config.DataDir, name)
+	resolved, err := filepath.EvalSymlinks(path)
+	dataRoot, rootErr := filepath.EvalSymlinks(s.config.DataDir)
+	if err != nil || rootErr != nil || filepath.Dir(resolved) != dataRoot {
+		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "结果文件不存在")
+		return
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "结果文件不存在")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
 func (s *Server) handleHealthReport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
