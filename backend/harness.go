@@ -97,10 +97,13 @@ func (h *Harness) Plan(_ context.Context, prompt string) AgentPlan {
 }
 
 func validPlan(plan AgentPlan, tools []ToolSpec) bool {
-	if plan.Status != "success" || len(plan.Steps) == 0 {
+	if plan.Status != "success" || len(plan.Steps) == 0 || len(plan.Steps) > 3 {
 		return false
 	}
 	for _, step := range plan.Steps {
+		if strings.TrimSpace(step.Tool) == "" || strings.TrimSpace(step.Reason) == "" {
+			return false
+		}
 		found := false
 		for _, tool := range tools {
 			if step.Tool == tool.Name {

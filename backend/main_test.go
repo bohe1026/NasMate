@@ -148,6 +148,20 @@ func TestIndexRebuildPersistsMetadataOnly(t *testing.T) {
 	}
 }
 
+func TestValidPlanRejectsUnsafeShape(t *testing.T) {
+	tools := NewHarness().Tools
+	if validPlan(AgentPlan{Status: "success", Steps: []PlanStep{{Tool: "search_files"}}}, tools) {
+		t.Fatal("accepted empty plan reason")
+	}
+	steps := make([]PlanStep, 4)
+	for i := range steps {
+		steps[i] = PlanStep{Tool: "search_files", Reason: "read metadata"}
+	}
+	if validPlan(AgentPlan{Status: "success", Steps: steps}, tools) {
+		t.Fatal("accepted more than three steps")
+	}
+}
+
 func TestGenerateHealthReportPersistsArtifact(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: filepath.Join(root, "data"), MaxBodyBytes: 1 << 20})
