@@ -1,232 +1,171 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { CSSProperties, FormEvent } from 'react'
 import {
-  Activity,
-  ArrowUpRight,
-  Bot,
-  Check,
-  ChevronDown,
-  CircleDot,
-  Database,
-  Download,
-  FileSearch,
-  FolderOpen,
-  HardDrive,
-  LockKeyhole,
-  Menu,
-  MoreHorizontal,
-  Plus,
-  Server,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
-  SquareTerminal,
-  X,
-  Zap,
+  ArrowUp, ArrowUpRight, Check, ChevronDown, ChevronRight, CircleHelp, Download,
+  FileSearch, FolderOpen, HardDrive, History, LayoutGrid, LoaderCircle,
+  MessageSquare, Monitor, Palette, PanelLeft, Plus, Search, ShieldCheck,
+  Sparkles, SquareTerminal, X,
 } from 'lucide-react'
-import './App.css'
 import { apiFetch } from './api'
+import './App.css'
 
-type TaskStatus = '待处理' | '规划中' | '等待确认' | '运行中' | '已完成' | '已取消' | '失败'
-type TaskIcon = 'storage' | 'search' | 'docker' | 'download'
-type Task = {
-  id: string
-  title: string
-  detail: string
-  status: TaskStatus
-  time: string
-  icon: TaskIcon
-  summary: string
-}
-type ApiTask = { id: string; prompt: string; status: TaskStatus; summary: string; updatedAt: string }
-type StorageUsage = {
-  volumes?: Array<{ totalBytes: number; usedBytes: number; freeBytes: number }>
-  topItems?: Array<{ kind: string }>
-}
-type DownloadPlan = {
-  id: string
-  targetDirectory: string
-  sources: Array<{ title: string; url: string; license: string; sizeBytes: number }>
-  estimatedBytes: number
-  status: string
-}
-type Message = { role: 'user' | 'assistant'; text: string; time: string }
+type Page = 'home' | 'skills' | 'health' | 'downloads'
+type Task = { id: string; prompt: string; status: string; summary: string; updatedAt: string }
+type Usage = { volumes?: { name: string; totalBytes: number; usedBytes: number; freeBytes: number }[]; topItems?: { path: string; sizeBytes: number; kind: string }[] }
+type DownloadPlan = { id: string; targetDirectory: string; sources: { title: string; url: string; license: string; sizeBytes: number }[]; estimatedBytes: number; status: string }
+type TaskEvent = { id: number; type: string; data?: unknown }
+const themes = [{ name: '鸢尾紫', color: '#7363df' }, { name: '晴空蓝', color: '#437acb' }, { name: '松石绿', color: '#278375' }, { name: '暖杏橙', color: '#b86c3c' }, { name: '玫瑰粉', color: '#b76187' }]
+const capabilities = [
+  { title: '文件搜索', description: '不记得放哪了？从文件名找起。', prompt: '搜索授权目录中的文件', icon: FileSearch, tone: 'blue', tag: '文件元数据' },
+  { title: '空间分析', description: '看看是谁，悄悄占满了空间。', prompt: '分析 NAS 的空间占用', icon: HardDrive, tone: 'amber', tag: '只读分析' },
+  { title: '容器诊断', description: '容器的小状况，一起看看。', prompt: '检查 Docker 容器是否有异常', icon: SquareTerminal, tone: 'violet', tag: '状态与日志' },
+  { title: '备份检查', description: '重要的资料，多一份安心。', prompt: '检查最近一次备份状态', icon: ShieldCheck, tone: 'mint', tag: '恢复点检查' },
+]
+const pageNames: Record<Page, string> = { home: '新任务', skills: '常用能力', health: '存储健康', downloads: '下载任务' }
 
-const welcomeTask: Task = {
-  id: 'welcome',
-  title: '开始一个 NAS 任务',
-  detail: '等待你的指令',
-  status: '待处理',
-  time: '现在',
-  icon: 'storage',
-  summary: '描述你想检查或整理的内容，NasMate 会先生成计划。',
+function savedAccent() {
+  try { const value = localStorage.getItem('nasmate-accent'); if (value && /^#[0-9a-f]{6}$/i.test(value)) return value } catch { /* Some embedded browsers disable storage. */ }
+  return themes[0].color
 }
-
-function formatBytes(bytes: number) {
-  if (!Number.isFinite(bytes) || bytes < 0) return '--'
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
-  return `${(bytes / 1024 ** 3).toFixed(1)} GB`
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value < 0) return '—'
+  const unit = value >= 1024 ** 4 ? 4 : value >= 1024 ** 3 ? 3 : value >= 1024 ** 2 ? 2 : value >= 1024 ? 1 : 0
+  return `${(value / 1024 ** unit).toFixed(unit ? 1 : 0)} ${['B', 'KB', 'MB', 'GB', 'TB'][unit]}`
 }
-
-function formatTaskTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '--'
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-}
-
-function taskIcon(prompt: string): TaskIcon {
-  if (prompt.includes('Docker') || prompt.includes('容器')) return 'docker'
-  if (prompt.includes('下载')) return 'download'
-  if (prompt.includes('文件') || prompt.includes('目录')) return 'search'
-  return 'storage'
-}
-
-function fromApiTask(task: ApiTask): Task {
-  return {
-    id: task.id,
-    title: task.prompt,
-    detail: task.summary || task.status,
-    status: task.status,
-    time: formatTaskTime(task.updatedAt),
-    icon: taskIcon(task.prompt),
-    summary: task.summary || '任务已创建，等待后端执行结果。',
-  }
-}
-
-function iconForTask(icon: TaskIcon) {
-  if (icon === 'storage') return <HardDrive size={17} />
-  if (icon === 'search') return <FileSearch size={17} />
-  if (icon === 'docker') return <SquareTerminal size={17} />
-  return <Download size={17} />
-}
-
 async function readJSON<T>(response: Response): Promise<T> {
-  if (!response.ok) throw new Error(`request failed: ${response.status}`)
+  if (!response.ok) throw new Error('应用服务暂时不可用，请稍后重试。')
   return response.json() as Promise<T>
 }
 
 function App() {
+  const [page, setPage] = useState<Page>('home')
+  const [collapsed, setCollapsed] = useState(false)
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const [accent, setAccent] = useState(savedAccent)
   const [tasks, setTasks] = useState<Task[]>([])
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
+  const [tasksState, setTasksState] = useState('loading')
+  const [historySearch, setHistorySearch] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [activeId, setActiveId] = useState<string | null>(null)
   const [input, setInput] = useState('')
-  const [mobileMenu, setMobileMenu] = useState(false)
-  const [storage, setStorage] = useState<StorageUsage | null>(null)
-  const [storageState, setStorageState] = useState<'loading' | 'ready' | 'unavailable'>('loading')
-  const [containerCount, setContainerCount] = useState<number | null>(null)
-  const [backupState, setBackupState] = useState<'unknown' | 'ready' | 'unavailable'>('unknown')
-  const [downloadPlans, setDownloadPlans] = useState<DownloadPlan[]>([])
-  const [messages, setMessages] = useState<Message[]>([{ role: 'assistant', text: '描述你想在 NAS 上检查或整理的内容，我会先生成计划。', time: '--:--' }])
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const [usage, setUsage] = useState<Usage | null>(null)
+  const [usageState, setUsageState] = useState('loading')
+  const [plans, setPlans] = useState<DownloadPlan[]>([])
+  const [plansState, setPlansState] = useState('loading')
+  const [approving, setApproving] = useState<string | null>(null)
+  const [events, setEvents] = useState<TaskEvent[]>([])
+  const [eventsState, setEventsState] = useState('idle')
+  const composer = useRef<HTMLTextAreaElement>(null)
+  const appearance = useRef<HTMLDialogElement>(null)
+  const permissions = useRef<HTMLDialogElement>(null)
+  const sidebar = useRef<HTMLElement>(null)
+  const menuButton = useRef<HTMLButtonElement>(null)
+  const activeTask = tasks.find((task) => task.id === activeId)
+  const pendingCount = plans.filter((plan) => plan.status === '待确认').length
+  const filteredTasks = tasks.filter((task) => task.prompt.toLowerCase().includes(historySearch.toLowerCase()))
 
-  const activeTask = useMemo(() => tasks.find((task) => task.id === activeTaskId) ?? tasks[0] ?? welcomeTask, [activeTaskId, tasks])
-  const volume = storage?.volumes?.[0]
-  const storagePercent = volume && volume.totalBytes > 0 ? Math.round((volume.usedBytes / volume.totalBytes) * 100) : null
-  const pendingPlan = downloadPlans.find((plan) => plan.status === '待确认')
-  const storageLabel = storageState === 'loading' ? '读取中' : storageState === 'ready' ? 'NAS 在线' : '等待授权目录'
-
+  useEffect(() => { try { localStorage.setItem('nasmate-accent', accent) } catch { /* The theme still works without storage. */ } }, [accent])
   useEffect(() => {
-    void apiFetch('/api/tasks')
-      .then((response) => readJSON<{ items?: ApiTask[] }>(response))
-      .then((data) => {
-        const next = (data.items ?? []).map(fromApiTask)
-        setTasks(next)
-        setActiveTaskId((current) => current ?? next[0]?.id ?? null)
-      })
-      .catch(() => undefined)
-
-    void apiFetch('/api/storage/usage')
-      .then((response) => readJSON<StorageUsage>(response))
-      .then((data) => {
-        setStorage(data)
-        setStorageState('ready')
-      })
-      .catch(() => setStorageState('unavailable'))
-
-    void apiFetch('/api/docker/containers')
-      .then((response) => readJSON<{ items?: unknown[] }>(response))
-      .then((data) => setContainerCount(data.items?.length ?? 0))
-      .catch(() => setContainerCount(null))
-
-    void apiFetch('/api/backups/status')
-      .then((response) => readJSON(response))
-      .then(() => setBackupState('ready'))
-      .catch(() => setBackupState('unavailable'))
-
-    void apiFetch('/api/downloads')
-      .then((response) => readJSON<{ items?: DownloadPlan[] }>(response))
-      .then((data) => setDownloadPlans(data.items ?? []))
-      .catch(() => undefined)
+    let live = true
+    void apiFetch('/api/tasks').then(readJSON<{ items: Task[] }>).then((data) => { if (live) { setTasks((data.items ?? []).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))); setTasksState('ready') } }).catch(() => { if (live) setTasksState('error') })
+    void apiFetch('/api/storage/usage').then(readJSON<Usage>).then((data) => { if (live) { setUsage(data); setUsageState('ready') } }).catch(() => { if (live) setUsageState('error') })
+    void apiFetch('/api/downloads').then(readJSON<{ items: DownloadPlan[] }>).then((data) => { if (live) { setPlans(data.items ?? []); setPlansState('ready') } }).catch(() => { if (live) setPlansState('error') })
+    return () => { live = false }
   }, [])
+  useEffect(() => {
+    if (!activeId) return
+    let live = true
+    void apiFetch(`/api/tasks/${encodeURIComponent(activeId)}/events`).then(readJSON<{ items: TaskEvent[] }>).then((data) => { if (live) { setEvents(data.items ?? []); setEventsState('ready') } }).catch(() => { if (live) setEventsState('error') })
+    return () => { live = false }
+  }, [activeId])
+  useEffect(() => {
+    if (!mobileOpen) return
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setMobileOpen(false); menuButton.current?.focus() } }
+    sidebar.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [mobileOpen])
 
-  const addMessage = (text: string, role: 'user' | 'assistant') => {
-    setMessages((current) => [...current, { role, text, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }])
-  }
-
-  const createTask = async (prompt: string) => {
+  function navigate(next: Page) { setPage(next); setActiveId(null); setMobileOpen(false); setError('') }
+  function newTask() { navigate('home'); setInput(''); requestAnimationFrame(() => composer.current?.focus()) }
+  function handleSuggestion(prompt: string) { navigate('home'); setInput(prompt); requestAnimationFrame(() => composer.current?.focus()) }
+  function selectTask(id: string) { setEvents([]); setEventsState('loading'); setActiveId(id) }
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    const prompt = input.trim()
+    if (prompt.length < 2 || submitting) return
+    setSubmitting(true)
+    setError('')
     try {
-      const response = await apiFetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) })
-      const task = fromApiTask(await readJSON<ApiTask>(response))
+      const task = await apiFetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) }).then(readJSON<Task>)
       setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)])
-      setActiveTaskId(task.id)
-      return task
-    } catch {
-      return null
-    }
+      setTasksState('ready')
+      selectTask(task.id)
+      setInput('')
+    } catch { setError('任务未能创建。请检查 UGOS 登录与应用连接，输入内容已保留。') }
+    finally { setSubmitting(false) }
   }
-
-  const runQuickAction = (prompt: string) => {
-    addMessage(prompt, 'user')
-    setMobileMenu(false)
-    void createTask(prompt).then((task) => addMessage(task ? '任务已创建，后端会先执行权限检查。' : '任务创建失败，请检查 UGOS 登录和应用服务状态。', 'assistant'))
-  }
-
-  const submitPrompt = () => {
-    const trimmed = input.trim()
-    if (!trimmed) return
-    addMessage(trimmed, 'user')
-    setInput('')
-    void createTask(trimmed).then((task) => addMessage(task ? '任务已创建，当前仅允许在授权范围内执行。' : '任务创建失败，请检查 UGOS 登录和应用服务状态。', 'assistant'))
-  }
-
-  const updateDownload = async (plan: DownloadPlan, action: 'approve' | 'deny') => {
+  async function approve(plan: DownloadPlan, action: 'approve' | 'deny') {
+    if (approving) return
+    setApproving(plan.id)
+    setError('')
     try {
-      const response = await apiFetch(`/api/downloads/${plan.id}?action=${action}`, { method: 'POST' })
-      const updated = await readJSON<DownloadPlan>(response)
-      setDownloadPlans((current) => current.map((item) => (item.id === updated.id ? updated : item)))
-    } catch {
-      addMessage('审批请求失败，请检查登录状态和应用服务状态。', 'assistant')
-    }
+      const updated = await apiFetch(`/api/downloads/${encodeURIComponent(plan.id)}?action=${action}`, { method: 'POST' }).then(readJSON<DownloadPlan>)
+      setPlans((current) => current.map((item) => item.id === updated.id ? updated : item))
+    } catch { setError('审批未成功，请检查连接后重试。') }
+    finally { setApproving(null) }
   }
 
   return (
-    <div className="app-shell">
-      <aside className={`sidebar ${mobileMenu ? 'sidebar-open' : ''}`}>
-        <div className="brand-row"><div className="brand-mark"><Sparkles size={17} /></div><div><div className="brand-name">NasMate</div><div className="brand-sub">LOCAL AI WORKBENCH</div></div><button className="icon-button mobile-close" aria-label="关闭菜单" onClick={() => setMobileMenu(false)}><X size={17} /></button></div>
-        <div className="device-chip"><span className="online-dot" /><div><strong>UGOS Pro NAS</strong><span>{storageLabel}</span></div><ChevronDown size={15} className="muted-icon" /></div>
-        <div className="nav-section"><div className="nav-label">工作区</div><button className="nav-item nav-item-active"><Activity size={17} /><span>任务中心</span><span className="nav-count">{tasks.length}</span></button><button className="nav-item"><FolderOpen size={17} /><span>文件空间</span></button><button className="nav-item"><Database size={17} /><span>存储健康</span></button><button className="nav-item"><Server size={17} /><span>容器诊断</span></button></div>
-        <div className="nav-section task-section"><div className="nav-label task-label"><span>最近任务</span><button className="tiny-button" aria-label="新建任务" onClick={() => setInput('')}><Plus size={14} /></button></div><div className="task-list">{tasks.map((task) => <button className={`task-row ${activeTask.id === task.id ? 'task-row-active' : ''}`} key={task.id} onClick={() => setActiveTaskId(task.id)}><span className={`task-icon task-icon-${task.icon}`}>{iconForTask(task.icon)}</span><span className="task-copy"><strong>{task.title}</strong><small>{task.detail}</small></span><span className={`task-status-dot status-${task.status === '运行中' ? 'running' : task.status === '等待确认' ? 'pending' : task.status === '失败' ? 'failed' : 'done'}`} /></button>)}</div></div>
-        <div className="sidebar-footer"><button className="nav-item"><Settings2 size={17} /><span>工作区设置</span></button><div className="privacy-note"><ShieldCheck size={15} /><span>本地数据边界已启用</span></div></div>
+    <div className={`workspace ${collapsed ? 'is-collapsed' : ''}`} style={{ '--accent': accent } as CSSProperties}>
+      <a className="skip-link" href="#workspace-main">跳到主要内容</a>
+      {mobileOpen && <button className="sidebar-scrim" aria-label="关闭导航菜单" onClick={() => { setMobileOpen(false); menuButton.current?.focus() }} />}
+      <aside ref={sidebar} className={`workspace-sidebar ${mobileOpen ? 'is-open' : ''}`} aria-label="工作区导航">
+        <div className="sidebar-top">
+          <button className="brand" onClick={newTask} aria-label="NasMate 首页"><span className="brand-symbol"><span /><span /></span><span className="brand-word">NasMate<span className="brand-period">.</span></span></button>
+          <button className="icon-button sidebar-toggle" title={collapsed ? '展开侧栏' : '收起侧栏'} aria-label={collapsed ? '展开侧栏' : '收起侧栏'} onClick={() => setCollapsed(!collapsed)}><PanelLeft size={17} /></button>
+          <button className="icon-button mobile-close" aria-label="关闭菜单" onClick={() => { setMobileOpen(false); menuButton.current?.focus() }}><X size={19} /></button>
+        </div>
+        <button className={`new-task ${page === 'home' && !activeId ? 'is-active' : ''}`} onClick={newTask} title="新任务"><Plus size={19} /><span>新任务</span><span className="new-task-hint">开始探索</span></button>
+        <nav className="primary-nav">
+          {([{ page: 'skills', icon: LayoutGrid }, { page: 'health', icon: HardDrive }, { page: 'downloads', icon: Download }] as const).map(({ page: target, icon: Icon }) => <button key={target} title={pageNames[target]} className={`nav-link ${page === target ? 'is-active' : ''}`} aria-current={page === target ? 'page' : undefined} onClick={() => navigate(target)}><Icon size={19} /><span>{pageNames[target]}</span>{target === 'downloads' && pendingCount > 0 && <span className="nav-badge">{pendingCount}</span>}</button>)}
+        </nav>
+        <div className="history-section">
+          <div className="history-heading"><span>最近任务 <ChevronDown size={12} /></span><button className="icon-button" title="搜索任务" aria-label="搜索最近任务" aria-expanded={searchOpen} onClick={() => setSearchOpen(!searchOpen)}><Search size={16} /></button></div>
+          {searchOpen && <input className="history-search" aria-label="搜索最近任务" placeholder="搜索任务…" value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} />}
+          <div className="history-list">
+            {filteredTasks.map((task) => <button key={task.id} title={task.prompt} className={`history-item ${activeId === task.id ? 'is-active' : ''}`} onClick={() => { navigate('home'); selectTask(task.id) }}><MessageSquare size={15} /><span>{task.prompt}</span></button>)}
+            {!filteredTasks.length && <div className="history-empty"><History size={21} /><p>{tasksState === 'loading' ? '正在读取任务…' : tasksState === 'error' ? '暂时无法读取历史任务' : historySearch ? '没有匹配的任务' : '你的下一件小事，从这里开始。'}</p></div>}
+          </div>
+        </div>
+        <div className="sidebar-bottom">
+          <div className="local-note"><ShieldCheck size={18} /><div><strong>你的 NAS，你的数据</strong><p>始终在授权范围内工作</p></div></div>
+          <button className="nav-link appearance-trigger" onClick={() => appearance.current?.showModal()} title="外观与主题"><Palette size={18} /><span>外观与主题</span><span className="current-color" /></button>
+          <div className="workspace-profile"><span className="profile-avatar">N</span><div><strong>我的工作区</strong><span>NasMate · 本地优先</span></div><button className="icon-button" aria-label="查看权限说明" title="权限说明" onClick={() => permissions.current?.showModal()}><CircleHelp size={18} /></button></div>
+        </div>
       </aside>
 
-      <main className="main-panel">
-        <header className="topbar"><button className="icon-button menu-trigger" aria-label="打开菜单" onClick={() => setMobileMenu(true)}><Menu size={19} /></button><div className="breadcrumb"><span>任务中心</span><span className="breadcrumb-sep">/</span><strong>{activeTask.title}</strong></div><div className="topbar-actions"><span className="model-pill"><span className="model-dot" /> Agent · 只读策略</span><button className="icon-button" aria-label="更多操作"><MoreHorizontal size={19} /></button></div></header>
-        <div className="workspace-grid">
-          <section className="conversation-panel">
-            <div className="conversation-head"><div><div className="eyebrow"><span className="eyebrow-line" />自主任务</div><h1>{activeTask.title}</h1><p className="subheading">{activeTask.id === 'welcome' ? '所有写入动作都必须先经过计划与确认' : activeTask.summary}</p></div><div className="head-status"><span className="status-pulse" />{activeTask.status}</div></div>
-            <div className="message-stream">{messages.map((message, index) => <div className={`message-row message-${message.role}`} key={`${message.time}-${index}`}><div className="message-avatar">{message.role === 'user' ? '你' : <Bot size={16} />}</div><div className="message-content"><div className="message-meta"><strong>{message.role === 'user' ? '你' : 'NasMate'}</strong><span>{message.time}</span></div><p>{message.text}</p></div></div>)}
-              {activeTask.id !== 'welcome' && <div className="execution-card"><div className="execution-head"><div className="execution-title"><span className="tool-badge"><HardDrive size={15} /></span><strong>任务状态</strong><span className="read-only-label">受策略控制</span></div><span className="execution-time">{activeTask.time}</span></div><div className="execution-progress"><div className="progress-label"><span>后端摘要</span><strong>{activeTask.status}</strong></div><p className="state-note">{activeTask.summary}</p></div><div className="execution-details"><span><Check size={13} /> 用户认证</span><span><Check size={13} /> 授权范围</span><span className="detail-muted"><CircleDot size={13} /> 工具执行由后端决定</span></div></div>}
-              <div className="assistant-note"><span className="note-icon"><LockKeyhole size={14} /></span><span>安全边界：后端只访问 UGOS 已授权目录，写入动作必须先审批。</span></div>
-            </div>
-            <div className="composer-wrap"><div className="composer-suggestions"><button onClick={() => setInput('找出最近 30 天增长最快的文件夹')}>增长最快的目录</button><button onClick={() => setInput('检查我的 Docker 容器是否有异常')}>检查容器异常</button><button onClick={() => setInput('验证最近一次备份是否可恢复')}>验证备份</button></div><div className="composer"><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitPrompt() } }} placeholder="描述你想在 NAS 上完成的任务…" rows={2} /><div className="composer-footer"><span className="composer-hint"><LockKeyhole size={13} /> 仅访问已授权范围</span><div className="composer-actions"><button className="icon-button" aria-label="添加附件"><Plus size={17} /></button><button className="send-button" aria-label="发送任务" onClick={submitPrompt}><ArrowUpRight size={17} /></button></div></div></div></div>
-          </section>
+      <main id="workspace-main" className="workspace-main">
+        <header className="workspace-header"><div><button ref={menuButton} className="icon-button mobile-menu" aria-label="打开导航菜单" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)}><PanelLeft size={20} /></button><span className="header-label">{activeTask ? '任务 / ' + activeTask.prompt : '个人工作台'}</span></div><button className="theme-shortcut" onClick={() => appearance.current?.showModal()}><Palette size={15} /><span>装扮工作台</span></button></header>
+        {page === 'home' && <section className={`home-content ${activeTask ? 'has-task' : ''}`}>
+          {activeTask ? <div className="task-conversation"><button className="text-button" onClick={newTask}>← 返回工作台</button><h1>{activeTask.prompt}</h1><div className="task-answer"><span className="answer-avatar"><Sparkles size={20} /></span><div><strong>NasMate <span className="status-tag">{activeTask.status}</span></strong><p>{activeTask.summary}</p></div></div><details className="event-details"><summary><History size={15} />执行轨迹 <span>{events.length} 条记录</span></summary>{eventsState === 'error' ? <p>暂时无法读取轨迹。</p> : eventsState === 'loading' ? <p>正在读取…</p> : events.map((entry) => <div className="event-entry" key={entry.id}><strong>{entry.type}</strong><pre>{JSON.stringify(entry.data, null, 2)}</pre></div>)}</details></div> : <div className="welcome-heading"><span className="welcome-eyebrow"><span />YOUR EVERYDAY NAS COMPANION</span><h1>让琐事简单，<br />让生活<span className="accent-word">多一点空间<span className="heading-spark">✦</span></span>。</h1><p>你好，我是 NasMate。今天，有什么可以一起完成？</p></div>}
+          <form className="prompt-shell" onSubmit={submit}>
+            <div className="prompt-box"><label className="sr-only" htmlFor="task-prompt">描述你的 NAS 任务</label><textarea id="task-prompt" ref={composer} value={input} disabled={submitting} maxLength={2000} placeholder={activeTask ? '开始另一项任务…' : '找一份文件，看看空间，或检查一次备份…'} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /><div className="prompt-toolbar"><button type="button" className="permission-button" onClick={() => permissions.current?.showModal()}><ShieldCheck size={17} />默认权限<ChevronDown size={12} /></button><div className="prompt-send"><span>{submitting ? '正在处理任务' : 'Enter 发送'}</span><button className="send-task" type="submit" aria-label="发送任务" disabled={input.trim().length < 2 || submitting}>{submitting ? <LoaderCircle className="spin" size={21} /> : <ArrowUp size={22} />}</button></div></div></div>
+            <div className="prompt-context"><span><Monitor size={15} />NAS 工作区</span><i /><button type="button" onClick={() => permissions.current?.showModal()}><FolderOpen size={15} />已授权的文件夹<ChevronDown size={12} /></button><span className="prompt-local"><span />本地文件处理</span></div>
+          </form>
+          {error && <p className="inline-error" role="alert">{error}</p>}
+          {!activeTask && <><div className="suggestion-row"><span>试着问问</span>{['分析 NAS 空间占用', '检查 Docker 容器', '检查备份状态'].map((prompt) => <button key={prompt} onClick={() => handleSuggestion(prompt)}>{prompt}<ArrowUpRight size={13} /></button>)}</div><div className="section-caption"><h2>把这些小事，交给我</h2><button onClick={() => navigate('skills')}>全部能力<ChevronRight size={14} /></button></div><div className="capability-grid">{capabilities.map(({ title, description, prompt, icon: Icon, tone, tag }) => <button className={`capability-card ${tone}`} key={title} onClick={() => handleSuggestion(prompt)}><span className="capability-art"><Icon size={27} strokeWidth={1.7} /></span><ArrowUpRight className="card-arrow" size={17} /><strong>{title}</strong><p>{description}</p><span className="card-tag">{tag}</span></button>)}</div><p className="home-footnote"><ShieldCheck size={13} />每一步都有迹可循，每一次写入由你决定。</p></>}
+        </section>}
 
-          <aside className="inspector-panel">
-            <div className="inspector-section overview-section"><div className="section-kicker">任务概览 <span>{storageState === 'ready' ? 'LIVE' : 'WAIT'}</span></div><div className="overview-metrics"><div><strong>{storagePercent === null ? '--' : `${storagePercent}%`}</strong><span>空间占用</span></div><div><strong>{storage?.topItems?.filter((item) => item.kind === 'directory').length ?? '--'}</strong><span>占用项</span></div><div><strong>{containerCount ?? '--'}</strong><span>容器</span></div></div><div className="storage-bar"><span style={{ width: `${storagePercent ?? 0}%` }} /></div><div className="storage-meta"><span>已用 {volume ? formatBytes(volume.usedBytes) : '--'}</span><span>可用 {volume ? formatBytes(volume.freeBytes) : '--'}</span></div>{storageState === 'unavailable' && <p className="state-note">未读取到存储数据，请在 UGOS 应用设置中授权文件夹。</p>}</div>
-            <div className="inspector-section quick-section"><div className="section-heading"><span>快速操作</span><button className="icon-button small" aria-label="快速操作设置"><MoreHorizontal size={16} /></button></div><button className="quick-action" onClick={() => runQuickAction('检查 Docker 容器是否有异常')}><span className="quick-icon blue"><SquareTerminal size={16} /></span><span><strong>Docker 健康巡检</strong><small>状态 · 资源 · 日志</small></span><ArrowUpRight size={15} /></button><button className="quick-action" onClick={() => runQuickAction('查找最近 30 天增长最快的文件夹')}><span className="quick-icon green"><FileSearch size={16} /></span><span><strong>增长趋势分析</strong><small>定位空间占用</small></span><ArrowUpRight size={15} /></button><button className="quick-action" onClick={() => runQuickAction('验证最近一次备份是否可恢复')}><span className="quick-icon amber"><ShieldCheck size={16} /></span><span><strong>验证备份</strong><small>检查最近恢复点</small></span><ArrowUpRight size={15} /></button></div>
-            <div className="inspector-section approval-section"><div className="section-heading"><span>待确认操作</span><span className="approval-count">{pendingPlan ? 1 : 0}</span></div>{pendingPlan ? <div className="approval-card"><div className="approval-title"><span className="approval-icon"><Download size={16} /></span><div><strong>下载计划</strong><small>{pendingPlan.sources.length} 个来源待确认</small></div></div><div className="approval-summary"><div><span>目标目录</span><strong>{pendingPlan.targetDirectory}</strong></div><div><span>预计占用</span><strong>{formatBytes(pendingPlan.estimatedBytes)}</strong></div><div><span>来源</span><strong>{pendingPlan.sources.length} 项</strong></div></div><div className="approval-buttons"><button className="deny-button" onClick={() => void updateDownload(pendingPlan, 'deny')}>拒绝</button><button className="approve-button" onClick={() => void updateDownload(pendingPlan, 'approve')}><Check size={15} /> 允许下载</button></div></div> : <p className="state-note">当前没有待确认的下载计划。</p>}</div>
-            <div className="inspector-section boundary-section"><div className="boundary-title"><ShieldCheck size={16} /><strong>安全边界</strong><span>已启用</span></div><div className="boundary-list"><span><Check size={13} /> 仅访问授权目录</span><span><Check size={13} /> 写入前需确认</span><span><Check size={13} /> 默认只读取元数据</span></div></div>
-          </aside>
-        </div>
-        <footer className="statusbar"><span><span className="online-dot" /> {storageLabel}</span><span><Zap size={13} /> 容器 {containerCount === null ? '未接入' : `${containerCount} 个`}</span><span><Database size={13} /> 备份 {backupState === 'ready' ? '可查询' : backupState === 'unavailable' ? '未接入' : '读取中'}</span><span className="statusbar-right">本地会话日志 <span className="status-dot-small" /></span></footer>
+        {page === 'skills' && <section className="utility-content"><div className="utility-heading"><span className="welcome-eyebrow">MADE FOR YOUR NAS</span><h1>日常小事，各有所长。</h1><p>选择一项能力，描述具体需求后再发送任务。</p></div><div className="capability-grid">{capabilities.map(({ title, description, prompt, icon: Icon, tone, tag }) => <button className={`capability-card ${tone}`} key={title} onClick={() => handleSuggestion(prompt)}><span className="capability-art"><Icon size={27} /></span><ArrowUpRight className="card-arrow" size={17} /><strong>{title}</strong><p>{description}</p><span className="card-tag">{tag}</span></button>)}</div><div className="info-strip"><ShieldCheck size={18} /><p>容器和备份能力取决于 NAS 的实际接入状态。暂不可用时，任务会明确提示。</p></div></section>}
+        {page === 'health' && <section className="utility-content"><div className="utility-heading"><span className="welcome-eyebrow">A LITTLE MORE ROOM</span><h1>空间，一目了然。</h1><p>授权范围内的存储使用情况。</p></div>{usageState !== 'ready' ? <div className="empty-panel"><HardDrive size={32} /><h2>{usageState === 'loading' ? '正在读取存储状态' : '暂时无法读取存储'}</h2><p>{usageState === 'loading' ? '大目录的首次统计可能需要一些时间。' : '请检查应用连接，并在 UGOS 应用设置中授权文件夹。'}</p></div> : <><div className="volume-grid">{usage?.volumes?.map((volume, index) => <div className="volume-card" key={`${volume.name}-${index}`}><span><HardDrive size={19} />{volume.name}</span><h2>{formatBytes(volume.usedBytes)}<small> / {formatBytes(volume.totalBytes)}</small></h2><div className="usage-track"><span style={{ width: `${Math.max(0, Math.min(100, volume.totalBytes ? volume.usedBytes / volume.totalBytes * 100 : 0))}%` }} /></div><p>剩余可用 {formatBytes(volume.freeBytes)}</p></div>)}</div><div className="directory-list"><h2>空间占用排行</h2>{usage?.topItems?.map((item, index) => <div key={`${item.path}-${index}`}><FolderOpen size={17} /><span>{item.path}</span><strong>{formatBytes(item.sizeBytes)}</strong></div>)}</div></>}</section>}
+        {page === 'downloads' && <section className="utility-content"><div className="utility-heading"><span className="welcome-eyebrow">EVERY FILE HAS A HOME</span><h1>下载，心中有数。</h1><p>查看任务状态，并确认每一次文件写入。</p></div>{error && <p className="inline-error" role="alert">{error}</p>}{plansState !== 'ready' || !plans.length ? <div className="empty-panel"><Download size={32} /><h2>{plansState === 'loading' ? '正在读取下载任务' : plansState === 'error' ? '暂时无法读取下载任务' : '还没有下载计划'}</h2><p>已有计划会出现在这里，供你查看来源与审批。</p></div> : plans.map((plan) => <article className="download-card" key={plan.id}><header><h2><Download size={19} />{plan.sources.length} 个文件</h2><span className="status-tag">{plan.status}</span></header><p className="download-path">保存到 {plan.targetDirectory}</p><p>预计占用 {formatBytes(plan.estimatedBytes)}</p><ul>{plan.sources.map((source, index) => <li key={`${source.url}-${index}`}><strong>{source.title || '未命名来源'}</strong><span className="source-url">{source.url}</span><small>许可：{source.license || '未提供'} · {formatBytes(source.sizeBytes)}</small></li>)}</ul>{plan.status === '待确认' && <div className="approval-actions"><button disabled={approving !== null} onClick={() => void approve(plan, 'deny')}>拒绝</button><button className="primary-button" disabled={approving !== null} onClick={() => void approve(plan, 'approve')}>{approving === plan.id ? '处理中…' : '确认下载'}</button></div>}</article>)}</section>}
       </main>
+
+      <dialog ref={appearance} className="settings-dialog" aria-labelledby="appearance-title" onClick={(event) => { if (event.target === event.currentTarget) appearance.current?.close() }}><div className="dialog-content"><header><span className="dialog-icon"><Palette size={22} /></span><button className="icon-button" autoFocus aria-label="关闭外观设置" onClick={() => appearance.current?.close()}><X size={20} /></button></header><h2 id="appearance-title">一点颜色，很像你。</h2><p>选择你喜欢的主题，让工作台多一点个人风格。</p><div className="color-options">{themes.map((theme) => <button key={theme.color} aria-label={theme.name} aria-pressed={theme.color === accent} className={theme.color === accent ? 'selected' : ''} onClick={() => setAccent(theme.color)}><span style={{ background: theme.color }}>{theme.color === accent && <Check size={19} />}</span><small>{theme.name}</small></button>)}</div><label className="custom-color"><span>或者，挑一个自己的颜色<small>仅保存在当前浏览器</small></span><input type="color" value={accent} onChange={(event) => setAccent(event.target.value)} aria-label="自定义主题颜色" /></label><div className="theme-preview"><span className="preview-dot" /><div><strong>NasMate</strong><p>把复杂留给我，把简单留给你。</p></div><ArrowUpRight size={19} /></div><button className="primary-button dialog-done" onClick={() => appearance.current?.close()}>就用这个颜色</button></div></dialog>
+      <dialog ref={permissions} className="settings-dialog" aria-labelledby="permissions-title" onClick={(event) => { if (event.target === event.currentTarget) permissions.current?.close() }}><div className="dialog-content"><header><span className="dialog-icon"><ShieldCheck size={22} /></span><button className="icon-button" autoFocus aria-label="关闭权限说明" onClick={() => permissions.current?.close()}><X size={20} /></button></header><h2 id="permissions-title">你的文件，你做主。</h2><p>NasMate 通过 UGOS 获取已授权的文件夹。请在 UGOS 应用设置中管理目录授权。</p><ul className="permission-list"><li><Check size={16} />默认读取文件名和元数据</li><li><Check size={16} />下载写入前需要你确认</li><li><Check size={16} />不开放任意系统命令和自动删除</li></ul><button className="primary-button dialog-done" onClick={() => permissions.current?.close()}>知道了</button></div></dialog>
     </div>
   )
 }
