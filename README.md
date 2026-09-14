@@ -67,6 +67,15 @@ rootfs_arm64/bin/ugreen-ai-backend # Linux arm64
 - `GET /api/files/search`
 - `GET /api/docker/containers`
 - `GET /api/backups/status`
+- `GET /api/backups/recovery-plan`
+- `GET /api/models/status`
+- `GET /api/index/status`
+- `POST /api/index/rebuild`
+- `GET /api/index/search`
+- `GET /api/artifacts`
+- `GET /api/artifacts/{name}`
+- `POST /api/reports/health/generate`
+- `POST /api/network/sources/validate`
 - `POST /api/downloads/prepare`
 - `GET /api/downloads`
 - `GET /api/downloads/{id}`

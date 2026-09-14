@@ -24,6 +24,15 @@ Persistent task, download, and session state is stored below `UGAPP_DATA_DIR` (`
 - `GET /api/files/search`
 - `GET /api/docker/containers`
 - `GET /api/backups/status`
+- `GET /api/backups/recovery-plan`
+- `GET /api/models/status`
+- `GET /api/index/status`
+- `POST /api/index/rebuild`
+- `GET /api/index/search`
+- `GET /api/artifacts`
+- `GET /api/artifacts/{name}`
+- `POST /api/reports/health/generate`
+- `POST /api/network/sources/validate`
 - `POST /api/downloads/prepare`
 - `GET /api/downloads`
 - `GET /api/downloads/{id}`
@@ -36,4 +45,7 @@ Storage uses a read-only filesystem provider scoped to `UGAPP_SHARED_DIR`. Docke
 - Protected routes require UGOS user headers, except in explicit development mode.
 - Download plans require an authorized path under `UGAPP_SHARED_DIR` and always start in `待确认`.
 - URL schemes are restricted to HTTP(S), request bodies are capped, and path traversal is rejected.
+- API endpoints are rate-limited per authenticated user; expensive search, task, and download-plan routes have stricter limits.
+- Health reports and metadata indexes are stored below `UGAPP_DATA_DIR`; report retention is capped at 30 files.
+- Docker diagnostics redact common credential fields before returning logs.
 - Every task and approval emits an append-only event and persists session state below `UGAPP_DATA_DIR` when the UGOS runtime provides it.
