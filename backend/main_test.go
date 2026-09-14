@@ -142,6 +142,10 @@ func TestIndexRebuildPersistsMetadataOnly(t *testing.T) {
 	if !strings.Contains(string(data), "metadata-only") || strings.Contains(string(data), "content") {
 		t.Fatalf("index contains non-metadata content: %s", data)
 	}
+	res = request(t, server, http.MethodGet, "/api/index/search?keyword=notes", "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "notes.txt") {
+		t.Fatalf("expected indexed search result, got %d: %s", res.Code, res.Body.String())
+	}
 }
 
 func TestGenerateHealthReportPersistsArtifact(t *testing.T) {

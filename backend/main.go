@@ -553,6 +553,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleIndexStatus(w, r)
 	case path == "api/index/rebuild":
 		s.handleIndexRebuild(w, r)
+	case path == "api/index/search":
+		s.handleIndexSearch(w, r)
 	case path == "api/organize/dry-run":
 		s.handleOrganizeDryRun(w, r)
 	case path == "api/reports/health":
@@ -637,6 +639,43 @@ func (s *Server) handleIndexRebuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"status": "success", "summary": "元数据索引已重建", "artifact": path, "itemCount": len(items), "readOnly": true})
+}
+
+func (s *Server) handleIndexSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+		return
+	}
+	if s.config.DataDir == "" {
+		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "应用数据目录不可用")
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(s.config.DataDir, "metadata-index.json"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "索引尚未生成")
+		return
+	}
+	var index struct {
+		Items []FileMetadata `json:"items"`
+	}
+	if err := json.Unmarshal(data, &index); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "索引不可用")
+		return
+	}
+	keyword := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("keyword")))
+	items := make([]FileMetadata, 0)
+	for _, item := range index.Items {
+		if !s.authorizePath(item.Path) {
+			continue
+		}
+		if keyword == "" || strings.Contains(strings.ToLower(item.Name), keyword) {
+			items = append(items, item)
+			if len(items) == 100 {
+				break
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items), "readMode": "metadata-only", "source": "local-index"})
 }
 
 func (s *Server) handleValidateSources(w http.ResponseWriter, r *http.Request) {
