@@ -40,3 +40,15 @@ button { cursor: pointer; }
 .report-button { height: 34px; margin-top: 18px; padding: 0 14px; border: 0; border-radius: 9px; font-size: 10px; }
 .task-answer > div { flex: 1; min-width: 0; }
 .task-cancel { align-self: flex-start; height: 30px; padding: 0 10px; color: var(--danger); background: #fff2f3; border: 1px solid #f3d7da; border-radius: 8px; font-size: 10px; }
+.heading-actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:18px; }
+.secondary-button { border:1px solid var(--line); background:var(--surface); color:var(--ink); border-radius:9px; padding:0 14px; height:34px; font-size:10px; cursor:pointer; }
+.secondary-button:hover { border-color:var(--accent); color:var(--accent-strong); }
+.recovery-card { margin-top:24px; padding:20px; border:1px solid var(--line); border-radius:16px; background:var(--surface); }
+.recovery-card header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.recovery-card h2 { display:flex; align-items:center; gap:8px; margin:0; font-size:17px; }
+.recovery-card p { color:var(--muted); }
+.recovery-card dl { display:flex; gap:28px; flex-wrap:wrap; margin:16px 0; }
+.recovery-card dt { color:var(--muted); font-size:11px; }
+.recovery-card dd { margin:4px 0 0; font-weight:600; font-size:12px; }
+.recovery-card ol { padding-left:20px; color:var(--ink); line-height:1.8; font-size:11px; }
+.recovery-card > small { color:var(--muted); font-size:10px; }
