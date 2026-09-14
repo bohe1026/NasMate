@@ -162,6 +162,13 @@ func TestValidPlanRejectsUnsafeShape(t *testing.T) {
 	}
 }
 
+func TestRedactSecrets(t *testing.T) {
+	got := redactSecrets("token=abc password=hunter2 status=ok")
+	if strings.Contains(got, "abc") || strings.Contains(got, "hunter2") || !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("secrets were not redacted: %s", got)
+	}
+}
+
 func TestGenerateHealthReportPersistsArtifact(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: filepath.Join(root, "data"), MaxBodyBytes: 1 << 20})

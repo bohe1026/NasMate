@@ -1007,6 +1007,7 @@ func (s *Server) handleDocker(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取容器状态")
 			return
 		}
+		item = redactDiagnostic(item)
 		writeJSON(w, http.StatusOK, item)
 		return
 	}
@@ -1015,7 +1016,32 @@ func (s *Server) handleDocker(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取容器状态")
 		return
 	}
+	for i := range items {
+		items[i] = redactDiagnostic(items[i])
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "readOnly": true})
+}
+
+func redactDiagnostic(item ContainerDiagnostic) ContainerDiagnostic {
+	for i, line := range item.Logs {
+		item.Logs[i] = redactSecrets(line)
+	}
+	return item
+}
+
+func redactSecrets(value string) string {
+	keys := []string{"password", "passwd", "token", "api_key", "apikey", "authorization", "cookie", "secret"}
+	fields := strings.Fields(value)
+	for i, field := range fields {
+		for _, key := range keys {
+			if index := strings.Index(strings.ToLower(field), key+"="); index >= 0 {
+				equal := strings.Index(field[index:], "=") + index
+				fields[i] = field[:equal+1] + "[REDACTED]"
+				break
+			}
+		}
+	}
+	return strings.Join(fields, " ")
 }
 
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
