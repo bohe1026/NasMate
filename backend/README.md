@@ -13,6 +13,8 @@ The default address is `http://127.0.0.1:21010`. Development mode supplies a loc
 
 Persistent task, download, and session state is stored below `UGAPP_DATA_DIR` (`state.json` and `events.jsonl`). `UGAPP_SHARED_DIR` is the only filesystem root used by the read-only storage provider and download-plan path validation; its top-level UGOS authorization symlinks are resolved as approved roots, while nested symlinks are ignored. Application logs remain on standard output/error so UGOS can collect them under `UGAPP_LOG_DIR`.
 
+`UGAPP_HEALTH_INTERVAL` 可选配置定时健康报告，例如 `24h`；未设置时调度器关闭，最小有效间隔为 1 分钟。健康报告最多保留 30 份，旧报告按时间自动清理。
+
 ## API surface
 
 - `GET /api/health`
