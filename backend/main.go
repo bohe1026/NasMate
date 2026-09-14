@@ -192,6 +192,18 @@ type BackupStatus struct {
 	Recommendations []string  `json:"recommendations"`
 }
 
+type RecoveryPlan struct {
+	Status           string   `json:"status"`
+	Summary          string   `json:"summary"`
+	BackupName       string   `json:"backupName"`
+	Target           string   `json:"target"`
+	SampledFiles     int      `json:"sampledFiles"`
+	Steps            []string `json:"steps"`
+	WillOverwrite    bool     `json:"willOverwrite"`
+	RequiresApproval bool     `json:"requiresApproval"`
+	ReadOnly         bool     `json:"readOnly"`
+}
+
 type DownloadSource struct {
 	Title     string `json:"title"`
 	URL       string `json:"url"`
@@ -559,6 +571,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleDocker(w, r)
 	case path == "api/backups/status":
 		s.handleBackup(w, r)
+	case path == "api/backups/recovery-plan":
+		s.handleRecoveryPlan(w, r)
 	case path == "api/downloads/prepare":
 		s.handlePrepareDownload(w, r)
 	case path == "api/network/sources/validate":
@@ -947,6 +961,25 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleRecoveryPlan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+		return
+	}
+	status, err := s.backup.Status(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取备份状态")
+		return
+	}
+	plan := RecoveryPlan{Status: "success", Summary: "已生成只读恢复演练计划；未执行恢复", BackupName: status.Name, Target: status.Target, SampledFiles: status.SampledFiles, WillOverwrite: false, RequiresApproval: true, ReadOnly: true, Steps: []string{
+		"确认最近成功备份时间与恢复点范围",
+		"在用户授权的新目录中准备恢复目标，禁止覆盖原文件",
+		"抽样恢复文件并比较文件数量、大小与可读取性",
+		"记录验证结果并由用户决定是否执行完整恢复",
+	}}
+	writeJSON(w, http.StatusOK, plan)
 }
 
 func (s *Server) handlePrepareDownload(w http.ResponseWriter, r *http.Request) {

@@ -197,6 +197,21 @@ func TestDownloadExistingTargetIsRejected(t *testing.T) {
 	}
 }
 
+func TestRecoveryPlanIsReadOnlyAndRequiresApproval(t *testing.T) {
+	server := testServer()
+	res := request(t, server, http.MethodGet, "/api/backups/recovery-plan", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected recovery plan, got %d: %s", res.Code, res.Body.String())
+	}
+	var plan RecoveryPlan
+	if err := json.NewDecoder(res.Body).Decode(&plan); err != nil {
+		t.Fatal(err)
+	}
+	if !plan.ReadOnly || !plan.RequiresApproval || plan.WillOverwrite || len(plan.Steps) == 0 {
+		t.Fatalf("unsafe recovery plan: %+v", plan)
+	}
+}
+
 func TestExecuteTaskRunsMultipleReadOnlySteps(t *testing.T) {
 	server := testServer()
 	now := time.Now().UTC()
