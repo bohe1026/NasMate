@@ -70,6 +70,17 @@ func TestCancelFinishedTaskIsRejected(t *testing.T) {
 	}
 }
 
+func TestExpensiveEndpointRateLimit(t *testing.T) {
+	server := testServer()
+	var last *httptest.ResponseRecorder
+	for i := 0; i < 21; i++ {
+		last = request(t, server, http.MethodGet, "/api/files/search", "")
+	}
+	if last.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected rate limit after 20 searches, got %d: %s", last.Code, last.Body.String())
+	}
+}
+
 func TestExecuteTaskRunsMultipleReadOnlySteps(t *testing.T) {
 	server := testServer()
 	now := time.Now().UTC()

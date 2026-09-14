@@ -465,6 +465,13 @@ type Server struct {
 	harness      *Harness
 	downloadMu   sync.Mutex
 	downloadsCtx map[string]context.CancelFunc
+	rateMu       sync.Mutex
+	rateBuckets  map[string]rateBucket
+}
+
+type rateBucket struct {
+	started time.Time
+	count   int
 }
 
 func NewServer(config Config) *Server {
@@ -474,7 +481,7 @@ func NewServer(config Config) *Server {
 		docker = MockDocker{}
 		backup = MockBackup{}
 	}
-	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness(), downloadsCtx: make(map[string]context.CancelFunc)}
+	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness(), downloadsCtx: make(map[string]context.CancelFunc), rateBuckets: make(map[string]rateBucket)}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -489,6 +496,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := s.userFromRequest(r); err != nil {
 		writeError(w, http.StatusUnauthorized, "AUTH_REQUIRED", "需要 UGOS 用户认证")
+		return
+	}
+	user, _ := s.userFromRequest(r)
+	limit := 60
+	if (r.URL.Path == "/api/files/search") || (r.URL.Path == "/api/tasks" && r.Method == http.MethodPost) {
+		limit = 20
+	}
+	if r.URL.Path == "/api/downloads/prepare" {
+		limit = 10
+	}
+	if !s.allowRequest(user.ID, r.URL.Path, limit) {
+		writeError(w, http.StatusTooManyRequests, "RATE_LIMITED", "请求过于频繁，请稍后重试")
 		return
 	}
 
@@ -521,6 +540,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "接口不存在")
 	}
+}
+
+func (s *Server) allowRequest(userID, path string, limit int) bool {
+	now := time.Now()
+	key := userID + "|" + path
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	bucket := s.rateBuckets[key]
+	if bucket.started.IsZero() || now.Sub(bucket.started) >= time.Minute {
+		s.rateBuckets[key] = rateBucket{started: now, count: 1}
+		return true
+	}
+	if bucket.count >= limit {
+		return false
+	}
+	bucket.count++
+	s.rateBuckets[key] = bucket
+	return true
 }
 
 func (s *Server) setHeaders(w http.ResponseWriter, r *http.Request) {
