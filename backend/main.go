@@ -207,6 +207,10 @@ type downloadPrepareRequest struct {
 	Sources         []DownloadSource `json:"sources"`
 }
 
+type sourceValidationRequest struct {
+	Sources []DownloadSource `json:"sources"`
+}
+
 type FileSearchOptions struct {
 	Keyword        string
 	Extensions     []string
@@ -533,6 +537,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleBackup(w, r)
 	case path == "api/downloads/prepare":
 		s.handlePrepareDownload(w, r)
+	case path == "api/network/sources/validate":
+		s.handleValidateSources(w, r)
 	case path == "api/downloads":
 		s.handleDownloads(w, r)
 	case strings.HasPrefix(path, "api/downloads/"):
@@ -540,6 +546,44 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "接口不存在")
 	}
+}
+
+func (s *Server) handleValidateSources(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+		return
+	}
+	var req sourceValidationRequest
+	if err := decodeJSON(w, r, &req, s.config.MaxBodyBytes); err != nil {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
+		return
+	}
+	if len(req.Sources) == 0 || len(req.Sources) > 50 {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "来源数量必须在 1 到 50 之间")
+		return
+	}
+	var total int64
+	for i := range req.Sources {
+		source := &req.Sources[i]
+		parsed, err := url.ParseRequestURI(source.URL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || hasSensitiveURLQuery(parsed) {
+			writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "下载来源必须是有效且不含凭据的 HTTP(S) URL")
+			return
+		}
+		if strings.TrimSpace(source.Title) == "" {
+			source.Title = filepath.Base(parsed.Path)
+		}
+		if source.SizeBytes < 0 || source.SizeBytes > 10<<30 {
+			writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "单个下载文件大小超出限制")
+			return
+		}
+		total += source.SizeBytes
+	}
+	if total > 100<<30 {
+		writeError(w, http.StatusBadRequest, "STORAGE_INSUFFICIENT", "来源总大小超过 100GB 限制")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "success", "sources": req.Sources, "estimatedBytes": total, "requiresApproval": true, "nextActions": []string{"选择授权目录后创建下载计划"}})
 }
 
 func (s *Server) allowRequest(userID, path string, limit int) bool {

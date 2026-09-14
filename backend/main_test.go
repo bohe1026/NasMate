@@ -81,6 +81,28 @@ func TestExpensiveEndpointRateLimit(t *testing.T) {
 	}
 }
 
+func TestValidateNetworkSources(t *testing.T) {
+	server := testServer()
+	res := request(t, server, http.MethodPost, "/api/network/sources/validate", `{"sources":[{"url":"https://example.com/assets/demo.jpg","license":"CC BY","sizeBytes":100}]}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected source validation success, got %d: %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		RequiresApproval bool  `json:"requiresApproval"`
+		EstimatedBytes   int64 `json:"estimatedBytes"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.RequiresApproval || body.EstimatedBytes != 100 {
+		t.Fatalf("unexpected validation result: %+v", body)
+	}
+	res = request(t, server, http.MethodPost, "/api/network/sources/validate", `{"sources":[{"url":"https://example.com/a?token=secret"}]}`)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected credential-bearing URL rejection, got %d", res.Code)
+	}
+}
+
 func TestExecuteTaskRunsMultipleReadOnlySteps(t *testing.T) {
 	server := testServer()
 	now := time.Now().UTC()
