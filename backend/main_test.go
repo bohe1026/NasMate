@@ -165,6 +165,38 @@ func TestHealthSchedulerDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestDownloadExistingTargetIsRejected(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "photos")
+	if err := os.MkdirAll(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(target, "demo.jpg")
+	if err := os.WriteFile(existing, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, MaxBodyBytes: 1 << 20})
+	res := request(t, server, http.MethodPost, "/api/downloads/prepare", `{"targetDirectory":"`+target+`","sources":[{"title":"demo","url":"https://example.com/demo.jpg","license":"CC BY","sizeBytes":3}]}`)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("prepare failed: %d %s", res.Code, res.Body.String())
+	}
+	var plan DownloadPlan
+	if err := json.NewDecoder(res.Body).Decode(&plan); err != nil {
+		t.Fatal(err)
+	}
+	res = request(t, server, http.MethodPost, "/api/downloads/"+plan.ID+"?action=approve", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("approve failed: %d %s", res.Code, res.Body.String())
+	}
+	time.Sleep(100 * time.Millisecond)
+	server.store.mu.RLock()
+	status := server.store.downloads[plan.ID].Status
+	server.store.mu.RUnlock()
+	if status != statusFailed {
+		t.Fatalf("expected existing target to fail safely, got %s", status)
+	}
+}
+
 func TestExecuteTaskRunsMultipleReadOnlySteps(t *testing.T) {
 	server := testServer()
 	now := time.Now().UTC()

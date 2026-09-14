@@ -1121,6 +1121,11 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 }
 
 func (s *Server) executeDownload(ctx context.Context, id string) {
+	defer func() {
+		s.downloadMu.Lock()
+		delete(s.downloadsCtx, id)
+		s.downloadMu.Unlock()
+	}()
 	s.store.mu.RLock()
 	plan, ok := s.store.downloads[id]
 	if !ok {
@@ -1147,9 +1152,19 @@ func (s *Server) executeDownload(ctx context.Context, id string) {
 			s.failDownload(id, errForbidden)
 			return
 		}
+		if _, err := os.Stat(path); err == nil {
+			s.failDownload(id, fmt.Errorf("target file already exists"))
+			return
+		} else if !errors.Is(err, os.ErrNotExist) {
+			s.failDownload(id, err)
+			return
+		}
 		s.updateDownload(id, 0, source.Title)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, nil)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
 			s.failDownload(id, err)
 			return
 		}
@@ -1176,14 +1191,14 @@ func (s *Server) executeDownload(ctx context.Context, id string) {
 		file.Close()
 		resp.Body.Close()
 		if copyErr != nil {
+			if errors.Is(copyErr, context.Canceled) {
+				return
+			}
 			s.failDownload(id, copyErr)
 			return
 		}
 		s.updateDownload(id, written, "")
 	}
-	s.downloadMu.Lock()
-	delete(s.downloadsCtx, id)
-	s.downloadMu.Unlock()
 	s.store.mu.Lock()
 	if plan, ok := s.store.downloads[id]; ok {
 		plan.Status = statusCompleted
@@ -1207,6 +1222,10 @@ func (s *Server) updateDownload(id string, bytes int64, source string) {
 func (s *Server) failDownload(id string, err error) {
 	s.store.mu.Lock()
 	if plan, ok := s.store.downloads[id]; ok {
+		if plan.Status == statusCancelled {
+			s.store.mu.Unlock()
+			return
+		}
 		plan.Status = statusFailed
 		plan.CurrentSource = ""
 	}
