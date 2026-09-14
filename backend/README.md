@@ -33,6 +33,7 @@ Persistent task, download, and session state is stored below `UGAPP_DATA_DIR` (`
 - `GET /api/artifacts/{name}`
 - `POST /api/reports/health/generate`
 - `POST /api/network/sources/validate`
+- `POST /api/network/sources/probe`
 - `POST /api/downloads/prepare`
 - `GET /api/downloads`
 - `GET /api/downloads/{id}`
