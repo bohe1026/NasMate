@@ -498,6 +498,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.harness.HandlePlan(w, r)
 	case path == "api/organize/dry-run":
 		s.handleOrganizeDryRun(w, r)
+	case path == "api/reports/health":
+		s.handleHealthReport(w, r)
 	case strings.HasPrefix(path, "api/tasks/"):
 		s.handleTask(w, r, strings.TrimPrefix(path, "api/tasks/"))
 	case path == "api/storage/usage":
