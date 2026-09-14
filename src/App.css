@@ -52,3 +52,4 @@ button { cursor: pointer; }
 .recovery-card dd { margin:4px 0 0; font-weight:600; font-size:12px; }
 .recovery-card ol { padding-left:20px; color:var(--ink); line-height:1.8; font-size:11px; }
 .recovery-card > small { color:var(--muted); font-size:10px; }
+.download-progress{margin:14px 0}.download-progress>div:first-child{display:flex;justify-content:space-between;gap:10px;color:var(--muted);font-size:10px;margin-bottom:7px}.download-progress strong{color:var(--ink);font-weight:650}.download-progress .usage-track{height:6px}
