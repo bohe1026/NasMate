@@ -39,14 +39,15 @@ var (
 )
 
 type Config struct {
-	Addr          string
-	DevMode       bool
-	SharedRoots   []string
-	DataDir       string
-	EventLogPath  string
-	StatePath     string
-	MaxBodyBytes  int64
-	AllowedOrigin string
+	Addr           string
+	DevMode        bool
+	SharedRoots    []string
+	DataDir        string
+	EventLogPath   string
+	StatePath      string
+	MaxBodyBytes   int64
+	AllowedOrigin  string
+	HealthInterval time.Duration
 }
 
 func loadConfig() Config {
@@ -81,15 +82,28 @@ func loadConfig() Config {
 		allowedOrigin = envOr("UGREEN_AI_ALLOWED_ORIGIN", allowedOrigin)
 	}
 	return Config{
-		Addr:          addr,
-		DevMode:       devMode,
-		SharedRoots:   sharedRoots,
-		DataDir:       dataDir,
-		EventLogPath:  eventLogPath,
-		StatePath:     statePath,
-		MaxBodyBytes:  1 << 20,
-		AllowedOrigin: allowedOrigin,
+		Addr:           addr,
+		DevMode:        devMode,
+		SharedRoots:    sharedRoots,
+		DataDir:        dataDir,
+		EventLogPath:   eventLogPath,
+		StatePath:      statePath,
+		MaxBodyBytes:   1 << 20,
+		AllowedOrigin:  allowedOrigin,
+		HealthInterval: parseDurationEnv("UGAPP_HEALTH_INTERVAL"),
 	}
+}
+
+func parseDurationEnv(key string) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return 0
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < time.Minute {
+		return 0
+	}
+	return duration
 }
 
 func envOr(key, fallback string) string {
@@ -1234,7 +1248,10 @@ func min(left, right int) int {
 
 func main() {
 	config := loadConfig()
-	server := &http.Server{Addr: config.Addr, Handler: NewServer(config), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	app := NewServer(config)
+	stopReports := app.StartHealthScheduler()
+	defer stopReports()
+	server := &http.Server{Addr: config.Addr, Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

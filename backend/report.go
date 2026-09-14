@@ -27,6 +27,44 @@ type Artifact struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+func (s *Server) StartHealthScheduler() func() {
+	if s.config.HealthInterval <= 0 {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(s.config.HealthInterval)
+		defer ticker.Stop()
+		defer close(done)
+		for {
+			select {
+			case <-ticker.C:
+				report := s.buildHealthReport(&http.Request{Method: http.MethodGet})
+				_ = s.persistHealthReport(report)
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return func() { close(stop); <-done }
+}
+
+func (s *Server) persistHealthReport(report HealthReport) error {
+	if s.config.DataDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(s.config.DataDir, 0700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(s.config.DataDir, fmt.Sprintf("health-report-%s.json", report.GeneratedAt.Format("20060102-150405")))
+	return os.WriteFile(path, data, 0600)
+}
+
 func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
@@ -70,16 +108,11 @@ func (s *Server) handleGenerateHealthReport(w http.ResponseWriter, r *http.Reque
 	report := s.buildHealthReport(r)
 	artifact := ""
 	if s.config.DataDir != "" {
-		if err := os.MkdirAll(s.config.DataDir, 0700); err != nil {
+		if err := s.persistHealthReport(report); err != nil {
 			writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "无法保存健康报告")
 			return
 		}
 		artifact = filepath.Join(s.config.DataDir, fmt.Sprintf("health-report-%s.json", report.GeneratedAt.Format("20060102-150405")))
-		data, err := json.MarshalIndent(report, "", "  ")
-		if err != nil || os.WriteFile(artifact, data, 0600) != nil {
-			writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "无法保存健康报告")
-			return
-		}
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"status": "success", "summary": "健康报告已生成", "artifact": artifact, "report": report, "readOnly": true})
 }

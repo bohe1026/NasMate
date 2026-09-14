@@ -140,6 +140,15 @@ func TestGenerateHealthReportPersistsArtifact(t *testing.T) {
 	}
 }
 
+func TestHealthSchedulerDisabledByDefault(t *testing.T) {
+	server := NewServer(Config{DevMode: true})
+	stop := server.StartHealthScheduler()
+	stop()
+	if server.config.HealthInterval != 0 {
+		t.Fatalf("expected scheduler disabled by default, got %s", server.config.HealthInterval)
+	}
+}
+
 func TestExecuteTaskRunsMultipleReadOnlySteps(t *testing.T) {
 	server := testServer()
 	now := time.Now().UTC()
