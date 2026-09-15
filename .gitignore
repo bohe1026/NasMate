@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+coverage/
 *.local
 rootfs_common/www/
 rootfs_amd64/bin/ugreen-ai-backend
