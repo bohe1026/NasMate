@@ -94,6 +94,27 @@ it('polls a running task until its final status and event trail appear', async (
   }
 })
 
+it('offers a manual retry for an interrupted task without replaying it automatically', async () => {
+  taskReply = [{ ...runningTask, status: '失败', summary: '服务重启中断，未继续执行；请重新发起任务' }]
+  const user = userEvent.setup()
+  render(<App />)
+  await user.click(await screen.findByRole('button', { name: '检查备份' }))
+  await user.click(screen.getByRole('button', { name: '重新发起任务' }))
+  expect(screen.getByRole('textbox', { name: '描述你的 NAS 任务' })).toHaveProperty('value', '检查备份')
+  expect(fetchMock.mock.calls.some(([input, init]) => String(input) === '/api/tasks' && init?.method === 'POST')).toBe(false)
+})
+
+it('explains interrupted downloads without silently reusing approval', async () => {
+  const interrupted = { id: 'download-1', targetDirectory: '/photos', sources: [{ title: '素材', url: 'https://example.com/image.jpg', license: 'CC0', sizeBytes: 1024 }], estimatedBytes: 1024, status: '失败', errorCode: 'TASK_INTERRUPTED' }
+  const fallback = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (input, init) => String(input) === '/api/downloads' ? Response.json({ items: [interrupted] }) : fallback(input, init))
+  const user = userEvent.setup()
+  render(<App />)
+  await user.click(screen.getByRole('button', { name: '下载任务' }))
+  await screen.findByText('服务重启中断，请重新生成下载计划并审批。')
+  expect(screen.queryByRole('button', { name: '确认下载' })).toBeNull()
+})
+
 it('shows the complete dry run preview without executing file changes', async () => {
   const result = {
     dryRun: true, summary: '已生成批量整理预览，未修改任何文件', spaceDelta: 0,
