@@ -396,6 +396,13 @@ func (s *Server) StopBackgroundWork() {
 	for _, cancel := range downloadCancels {
 		cancel()
 	}
+	done := make(chan struct{})
+	go func() { s.workers.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Printf("background workers did not stop within shutdown grace period")
+	}
 	changedTasks := make([]string, 0, len(taskCancels))
 	changedDownloads := make([]string, 0, len(downloadCancels))
 	s.store.mu.Lock()
@@ -595,6 +602,7 @@ type Server struct {
 	harness         *Harness
 	taskMu          sync.Mutex
 	tasksCtx        map[string]context.CancelFunc
+	workers         sync.WaitGroup
 	downloadMu      sync.Mutex
 	downloadsCtx    map[string]context.CancelFunc
 	rateMu          sync.Mutex
@@ -1016,6 +1024,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		s.store.appendEvent(task.ID, "session.created", map[string]string{"userId": user.ID})
 		s.store.appendEvent(task.ID, "user.message", map[string]string{"prompt": task.Prompt})
 		taskCopy := *task
+		s.workers.Add(1)
 		go s.runTask(ctx, cancel, task.ID, task.Prompt)
 		writeJSON(w, http.StatusCreated, taskCopy)
 	default:
@@ -1024,6 +1033,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runTask(ctx context.Context, cancel context.CancelFunc, id, prompt string) {
+	defer s.workers.Done()
 	defer func() {
 		s.taskMu.Lock()
 		delete(s.tasksCtx, id)
@@ -1288,6 +1298,7 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 		s.store.appendEvent(resumed.ID, "session.forked", map[string]string{"parentTaskId": taskCopy.ID, "parentStatus": taskCopy.Status, "parentSummary": taskCopy.Summary})
 		s.store.appendEvent(resumed.ID, "user.message", map[string]string{"prompt": resumed.Prompt})
 		copy := *resumed
+		s.workers.Add(1)
 		go s.runTask(ctx, cancel, resumed.ID, resumed.Prompt)
 		writeJSON(w, http.StatusCreated, copy)
 		return
