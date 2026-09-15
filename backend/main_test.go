@@ -1032,6 +1032,30 @@ func TestFileSearchHTTPFiltersAndRejectsUnauthorizedRoot(t *testing.T) {
 	}
 }
 
+func TestReadOnlyStorageEndpointsReportUserCancellation(t *testing.T) {
+	server := NewServer(Config{DevMode: true, SharedRoots: []string{t.TempDir()}})
+	server.storage = cancelledReadOnlyStorage{}
+	for _, path := range []string{"/api/storage/usage", "/api/files/search"} {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
+		res := httptest.NewRecorder()
+		server.ServeHTTP(res, req)
+		if res.Code != http.StatusRequestTimeout || !strings.Contains(res.Body.String(), "USER_CANCELLED") {
+			t.Fatalf("%s cancellation mismatch: %d %s", path, res.Code, res.Body.String())
+		}
+	}
+}
+
+type cancelledReadOnlyStorage struct{}
+
+func (cancelledReadOnlyStorage) Usage(ctx context.Context) (StorageUsage, error) {
+	return StorageUsage{}, ctx.Err()
+}
+func (cancelledReadOnlyStorage) Search(ctx context.Context, _ FileSearchOptions) ([]FileMetadata, error) {
+	return nil, ctx.Err()
+}
+
 func TestProtectedRoutesRequireUGOSUser(t *testing.T) {
 	server := NewServer(Config{SharedRoots: []string{"/tmp/ugreen-workspace"}, MaxBodyBytes: 1 << 20})
 	res := request(t, server, http.MethodGet, "/api/storage/usage", "")

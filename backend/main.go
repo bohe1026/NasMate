@@ -1343,6 +1343,10 @@ func (s *Server) handleStorageUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.storage.Usage(r.Context())
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || r.Context().Err() != nil {
+		writeError(w, http.StatusRequestTimeout, "USER_CANCELLED", "存储统计已取消")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取存储状态")
 		return
@@ -1369,6 +1373,10 @@ func (s *Server) handleFileSearch(w http.ResponseWriter, r *http.Request) {
 		options.RootPath = resolved
 	}
 	items, err := s.storage.Search(r.Context(), options)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || r.Context().Err() != nil {
+		writeError(w, http.StatusRequestTimeout, "USER_CANCELLED", "文件搜索已取消")
+		return
+	}
 	if err != nil && !errors.Is(err, errSearchLimit) {
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取文件元数据")
 		return
