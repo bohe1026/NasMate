@@ -201,6 +201,42 @@ func TestTaskEventsRejectCursorBeyondSession(t *testing.T) {
 	}
 }
 
+func TestTaskListIsPaginatedAndScoped(t *testing.T) {
+	server := testServer()
+	now := time.Now().UTC()
+	server.store.mu.Lock()
+	for i := 0; i < 101; i++ {
+		id := fmt.Sprintf("task-%03d", i)
+		server.store.tasks[id] = &Task{ID: id, Prompt: id, Status: statusCompleted, UpdatedAt: now.Add(time.Duration(i) * time.Second), User: User{ID: "dev-user"}}
+	}
+	server.store.tasks["other"] = &Task{ID: "other", Prompt: "other", Status: statusCompleted, UpdatedAt: now.Add(time.Hour), User: User{ID: "other-user"}}
+	server.store.mu.Unlock()
+	res := request(t, server, http.MethodGet, "/api/tasks?limit=100", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("task page failed: %d: %s", res.Code, res.Body.String())
+	}
+	var page struct {
+		Items      []Task `json:"items"`
+		Truncated  bool   `json:"truncated"`
+		NextOffset int    `json:"nextOffset"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 100 || !page.Truncated || page.NextOffset != 100 {
+		t.Fatalf("unexpected first task page: %+v", page)
+	}
+	for _, item := range page.Items {
+		if item.User.ID != "dev-user" {
+			t.Fatalf("cross-user task leaked: %+v", item)
+		}
+	}
+	res = request(t, server, http.MethodGet, "/api/tasks?limit=100&offset=100", "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"truncated":false`) || !strings.Contains(res.Body.String(), `"nextOffset":101`) {
+		t.Fatalf("last task page was marked incorrectly: %d: %s", res.Code, res.Body.String())
+	}
+}
+
 type cancelAwareStorage struct {
 	started     chan struct{}
 	release     chan struct{}

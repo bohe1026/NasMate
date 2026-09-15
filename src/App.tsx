@@ -50,6 +50,8 @@ function App() {
   const [accent, setAccent] = useState(savedAccent)
   const [tasks, setTasks] = useState<Task[]>([])
   const [tasksState, setTasksState] = useState('loading')
+  const [tasksHasMore, setTasksHasMore] = useState(false)
+  const [tasksOffset, setTasksOffset] = useState(0)
   const [historySearch, setHistorySearch] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -84,7 +86,7 @@ function App() {
   useEffect(() => { try { localStorage.setItem('nasmate-accent', accent) } catch { /* The theme still works without storage. */ } }, [accent])
   useEffect(() => {
     let live = true
-    void apiFetch('/api/tasks').then(readJSON<{ items: Task[] }>).then((data) => { if (live) { setTasks((data.items ?? []).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))); setTasksState('ready') } }).catch(() => { if (live) setTasksState('error') })
+    void apiFetch('/api/tasks').then(readJSON<{ items: Task[]; truncated?: boolean; nextOffset?: number }>).then((data) => { if (live) { setTasks(data.items ?? []); setTasksHasMore(Boolean(data.truncated)); setTasksOffset(data.nextOffset ?? (data.items?.length ?? 0)); setTasksState('ready') } }).catch(() => { if (live) setTasksState('error') })
     void apiFetch('/api/storage/usage').then(readJSON<Usage>).then((data) => { if (live) { setUsage(data); setUsageState('ready') } }).catch(() => { if (live) setUsageState('error') })
     void apiFetch('/api/downloads').then(readJSON<{ items: DownloadPlan[] }>).then((data) => { if (live) { setPlans(data.items ?? []); setPlansState('ready') } }).catch(() => { if (live) setPlansState('error') })
     void apiFetch('/api/artifacts').then(readJSON<{ items: Artifact[] }>).then((data) => { if (live) setArtifacts(data.items ?? []) }).catch(() => undefined)
@@ -129,6 +131,12 @@ function App() {
   function newTask() { navigate('home'); setInput(''); requestAnimationFrame(() => composer.current?.focus()) }
   function handleSuggestion(prompt: string) { navigate('home'); setInput(prompt); requestAnimationFrame(() => composer.current?.focus()) }
   function selectTask(id: string) { setEvents([]); setEventsBefore(null); setEventsHasMore(false); setEventsState('loading'); setActiveId(id) }
+  async function loadMoreTasks() {
+    try {
+      const data = await apiFetch(`/api/tasks?limit=100&offset=${tasksOffset}`).then(readJSON<{ items: Task[]; truncated?: boolean; nextOffset?: number }>)
+      setTasks((current) => [...current, ...(data.items ?? []).filter((item) => !current.some((existing) => existing.id === item.id))]); setTasksHasMore(Boolean(data.truncated)); setTasksOffset(data.nextOffset ?? tasksOffset + (data.items?.length ?? 0))
+    } catch { setError('更早的任务暂时无法读取。') }
+  }
   async function loadOlderEvents() {
     if (!activeId || !eventsBefore) return
     try {
@@ -214,6 +222,7 @@ function App() {
           {searchOpen && <input className="history-search" aria-label="搜索最近任务" placeholder="搜索任务…" value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} />}
           <div className="history-list">
             {filteredTasks.map((task) => <button key={task.id} title={task.prompt} className={`history-item ${activeId === task.id ? 'is-active' : ''}`} onClick={() => { navigate('home'); selectTask(task.id) }}><MessageSquare size={15} /><span>{task.prompt}</span></button>)}
+            {tasksHasMore && !historySearch && <button className="text-button history-more" onClick={() => void loadMoreTasks()}>加载更早任务</button>}
             {!filteredTasks.length && <div className="history-empty"><History size={21} /><p>{tasksState === 'loading' ? '正在读取任务…' : tasksState === 'error' ? '暂时无法读取历史任务' : historySearch ? '没有匹配的任务' : '你的下一件小事，从这里开始。'}</p></div>}
           </div>
         </div>

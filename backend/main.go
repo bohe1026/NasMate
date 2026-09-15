@@ -830,7 +830,33 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		s.store.mu.RUnlock()
-		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+		sort.Slice(items, func(i, j int) bool { return items[i].UpdatedAt.After(items[j].UpdatedAt) })
+		limit := 100
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < 1 || parsed > 100 {
+				writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "limit 必须在 1 到 100 之间")
+				return
+			}
+			limit = parsed
+		}
+		offset := 0
+		if raw := r.URL.Query().Get("offset"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < 0 {
+				writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "offset 必须是非负整数")
+				return
+			}
+			offset = parsed
+		}
+		total := len(items)
+		if offset >= total {
+			items = []Task{}
+		} else {
+			end := min(offset+limit, total)
+			items = items[offset:end]
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items, "truncated": offset+len(items) < total, "nextOffset": offset + len(items)})
 	case http.MethodPost:
 		var req taskCreateRequest
 		if err := decodeJSON(w, r, &req, s.config.MaxBodyBytes); err != nil {
