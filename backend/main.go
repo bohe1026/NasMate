@@ -688,8 +688,27 @@ func (s *Server) handleIndexStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
 		return
 	}
+	status := "not_generated"
+	var generatedAt time.Time
+	itemCount := 0
+	if s.config.DataDir != "" {
+		path := filepath.Join(s.config.DataDir, "metadata-index.json")
+		if data, err := os.ReadFile(path); err == nil {
+			var index struct {
+				GeneratedAt time.Time      `json:"generatedAt"`
+				Items       []FileMetadata `json:"items"`
+			}
+			if json.Unmarshal(data, &index) == nil && !index.GeneratedAt.IsZero() {
+				status, generatedAt, itemCount = "available", index.GeneratedAt, len(index.Items)
+			} else {
+				status = "unavailable"
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":                    "available",
+		"status":                    status,
+		"generatedAt":               generatedAt,
+		"itemCount":                 itemCount,
 		"mode":                      "metadata-only",
 		"roots":                     s.config.SharedRoots,
 		"bodyIndexEnabled":          false,

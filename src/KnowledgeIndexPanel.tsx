@@ -12,6 +12,8 @@ type IndexStatus = {
   ocrEnabled?: boolean
   mediaTranscriptionEnabled?: boolean
   requiresExplicitConsent?: boolean
+  generatedAt?: string
+  itemCount?: number
 }
 
 type IndexedFile = {
@@ -93,7 +95,7 @@ export function KnowledgeIndexPanel() {
       <button className="icon-button" aria-label="刷新索引状态" title="刷新索引状态" onClick={() => { setStatusState('loading'); void readStatus().then((data) => { setStatus(data); setStatusState('ready') }).catch(() => setStatusState('error')) }} disabled={statusState === 'loading'}><RefreshCw size={16} className={statusState === 'loading' ? 'spin' : undefined} /></button>
     </header>
     {statusState === 'error' && <p className="readonly-error" role="alert">索引状态暂时无法读取，请检查应用连接后重试。</p>}
-    {status && <div className="index-status-box"><div className="backup-title"><strong>{metadataOnly ? '元数据模式' : '索引状态待确认'}</strong><span className={`status-tag ${metadataOnly ? 'is-success' : 'is-warning'}`}>{status.status === 'available' ? '可用' : status.status || '未知'}</span></div><p>{status.roots?.length ? <>授权根目录：{status.roots.map((root) => <code className="index-root" key={root}>{root}</code>)}</> : '尚未发现授权根目录。'}</p><ul className="index-safety-list"><li>正文索引、OCR、音视频转写均已关闭</li><li>{status.requiresExplicitConsent ? '扩展索引需要真实用户单独授权' : '扩展索引授权状态待确认'}</li></ul></div>}
+    {status && <div className="index-status-box"><div className="backup-title"><strong>{metadataOnly ? '元数据模式' : '索引状态待确认'}</strong><span className={`status-tag ${status.status === 'available' ? 'is-success' : 'is-warning'}`}>{status.status === 'available' ? '可用' : status.status === 'not_generated' ? '尚未生成' : status.status || '不可用'}</span></div><p>{status.roots?.length ? <>授权根目录：{status.roots.map((root) => <code className="index-root" key={root}>{root}</code>)}</> : '尚未发现授权根目录。'}</p>{status.status === 'available' && <p className="index-meta">{status.itemCount ?? 0} 项 · {formatDate(status.generatedAt)}</p>}<ul className="index-safety-list"><li>正文索引、OCR、音视频转写均已关闭</li><li>{status.requiresExplicitConsent ? '扩展索引需要真实用户单独授权' : '扩展索引授权状态待确认'}</li></ul></div>}
     <div className="index-actions"><button className="secondary-button" onClick={() => void rebuild()} disabled={rebuildState === 'loading'}><RefreshCw size={14} className={rebuildState === 'loading' ? 'spin' : undefined} />{rebuildState === 'loading' ? '重建中…' : '重建元数据索引'}</button>{rebuildMessage && <p className={rebuildState === 'error' ? 'readonly-error' : 'index-success'} role={rebuildState === 'error' ? 'alert' : 'status'}>{rebuildMessage}</p>}</div>
     <form className="index-search-form" onSubmit={search}><label>索引关键词<input aria-label="索引关键词" value={keyword} maxLength={2000} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索已索引的文件名" /></label><button className="secondary-button" disabled={searchState === 'loading'}><Search size={14} />{searchState === 'loading' ? '搜索中…' : '搜索索引'}</button></form>
     {searchState === 'error' && <p className="readonly-error" role="alert">索引尚未生成或暂时不可用，请先重建索引后重试。</p>}

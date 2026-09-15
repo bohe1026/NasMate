@@ -408,7 +408,7 @@ func TestModelStatusDoesNotExposeCredentials(t *testing.T) {
 func TestIndexStatusIsMetadataOnly(t *testing.T) {
 	server := testServer()
 	res := request(t, server, http.MethodGet, "/api/index/status", "")
-	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"bodyIndexEnabled":false`) {
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"status":"not_generated"`) || !strings.Contains(res.Body.String(), `"bodyIndexEnabled":false`) {
 		t.Fatalf("expected metadata-only index status, got %d: %s", res.Code, res.Body.String())
 	}
 }
@@ -427,6 +427,10 @@ func TestIndexRebuildPersistsMetadataOnly(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dataDir, "metadata-index.json"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	res = request(t, server, http.MethodGet, "/api/index/status", "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"status":"available"`) || !strings.Contains(res.Body.String(), `"itemCount":1`) {
+		t.Fatalf("expected generated index status, got %d: %s", res.Code, res.Body.String())
 	}
 	if !strings.Contains(string(data), "metadata-only") || strings.Contains(string(data), "content") {
 		t.Fatalf("index contains non-metadata content: %s", data)
