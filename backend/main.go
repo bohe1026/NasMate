@@ -1553,7 +1553,22 @@ func (s *Server) handleDownloads(w http.ResponseWriter, r *http.Request) {
 	}
 	s.store.mu.RUnlock()
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	limit, offset, err := parsePageParams(r.URL.Query(), 30, 30)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
+		return
+	}
+	total := len(items)
+	if offset >= total {
+		items = []DownloadPlan{}
+	} else {
+		end := offset + limit
+		if end > total {
+			end = total
+		}
+		items = items[offset:end]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset, "truncated": offset+len(items) < total})
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id string) {

@@ -493,6 +493,35 @@ func TestIndexStatusCountsOnlyAuthorizedItems(t *testing.T) {
 	}
 }
 
+func TestDownloadListIsPaginatedAndUserScoped(t *testing.T) {
+	server := testServer()
+	now := time.Now().UTC()
+	server.store.mu.Lock()
+	for i := 0; i < 31; i++ {
+		id := fmt.Sprintf("download-%02d", i)
+		server.store.downloads[id] = &DownloadPlan{ID: id, CreatedAt: now.Add(time.Duration(i) * time.Minute), User: User{ID: "dev-user"}}
+	}
+	server.store.downloads["private-download"] = &DownloadPlan{ID: "private-download", CreatedAt: now.Add(time.Hour), User: User{ID: "other-user"}}
+	server.store.mu.Unlock()
+	res := request(t, server, http.MethodGet, "/api/downloads?limit=30", "")
+	var page struct {
+		Items     []DownloadPlan `json:"items"`
+		Total     int            `json:"total"`
+		Truncated bool           `json:"truncated"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if res.Code != http.StatusOK || len(page.Items) != 30 || page.Total != 31 || !page.Truncated {
+		t.Fatalf("unexpected download page: %+v", page)
+	}
+	for _, item := range page.Items {
+		if item.User.ID != "dev-user" {
+			t.Fatalf("cross-user download leaked: %+v", item)
+		}
+	}
+}
+
 func TestIndexRebuildPersistsMetadataOnly(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("private"), 0600); err != nil {
