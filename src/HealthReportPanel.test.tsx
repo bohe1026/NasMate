@@ -42,6 +42,6 @@ describe('health report snapshot', () => {
     render(<HealthReportPanel />)
     await screen.findByText('有一个容器需要关注')
     await user.click(screen.getByRole('button', { name: '刷新健康日报' }))
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 })
