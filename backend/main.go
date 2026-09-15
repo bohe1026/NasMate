@@ -653,19 +653,36 @@ func (s *Server) handleIndexSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "应用数据目录不可用")
 		return
 	}
-	data, err := os.ReadFile(filepath.Join(s.config.DataDir, "metadata-index.json"))
-	if err != nil {
+	items, err := s.searchMetadataIndex(r.URL.Query().Get("keyword"))
+	if errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "索引尚未生成")
 		return
+	}
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "索引不可用")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items), "readMode": "metadata-only", "source": "local-index"})
+}
+
+func (s *Server) searchMetadataIndex(keyword string) ([]FileMetadata, error) {
+	if s.config.DataDir == "" {
+		return nil, errProviderUnavailable
+	}
+	data, err := os.ReadFile(filepath.Join(s.config.DataDir, "metadata-index.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, errNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read metadata index: %w", err)
 	}
 	var index struct {
 		Items []FileMetadata `json:"items"`
 	}
 	if err := json.Unmarshal(data, &index); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "索引不可用")
-		return
+		return nil, fmt.Errorf("decode metadata index: %w", err)
 	}
-	keyword := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("keyword")))
+	keyword = strings.ToLower(strings.TrimSpace(keyword))
 	items := make([]FileMetadata, 0)
 	for _, item := range index.Items {
 		if !s.authorizePath(item.Path) {
@@ -678,7 +695,7 @@ func (s *Server) handleIndexSearch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items), "readMode": "metadata-only", "source": "local-index"})
+	return items, nil
 }
 
 func (s *Server) handleValidateSources(w http.ResponseWriter, r *http.Request) {
@@ -865,6 +882,8 @@ func (s *Server) executeReadOnlyTool(ctx context.Context, name, prompt string) (
 		return s.backup.Status(ctx)
 	case "search_files":
 		return s.storage.Search(ctx, FileSearchOptions{Keyword: extractSearchKeyword(prompt), MaxResults: 100})
+	case "search_index":
+		return s.searchMetadataIndex(extractSearchKeyword(prompt))
 	default:
 		return nil, fmt.Errorf("unknown tool %q: %w", name, errInvalidInput)
 	}

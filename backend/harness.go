@@ -51,6 +51,7 @@ type ModelProvider interface {
 func NewHarness() *Harness {
 	h := &Harness{Tools: []ToolSpec{
 		{Name: "search_files", Description: "搜索授权目录中的文件元数据", ReadOnly: true},
+		{Name: "search_index", Description: "查询授权目录中的本地元数据索引", ReadOnly: true},
 		{Name: "storage_usage", Description: "读取授权目录和文件系统容量", ReadOnly: true},
 		{Name: "inspect_containers", Description: "读取 Docker 容器状态和受限日志", ReadOnly: true},
 		{Name: "backup_status", Description: "读取备份状态和恢复有效性", ReadOnly: true},
@@ -84,6 +85,8 @@ func (h *Harness) Plan(_ context.Context, prompt string) AgentPlan {
 	switch {
 	case strings.Contains(prompt, "下载"):
 		steps = append(steps, PlanStep{Tool: "prepare_download", Reason: "下载属于外部网络和本地写入操作，必须先生成审批计划"})
+	case strings.Contains(prompt, "索引"):
+		steps = append(steps, PlanStep{Tool: "search_index", Reason: "查询本地元数据索引，不读取文件正文"})
 	case strings.Contains(prompt, "Docker") || strings.Contains(prompt, "容器"):
 		steps = append(steps, PlanStep{Tool: "inspect_containers", Reason: "先执行只读容器诊断"})
 	case strings.Contains(prompt, "备份") || strings.Contains(prompt, "恢复"):
