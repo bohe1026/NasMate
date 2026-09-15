@@ -162,6 +162,29 @@ func TestValidPlanRejectsUnsafeShape(t *testing.T) {
 	}
 }
 
+func TestHarnessExposesMetadataIndexAsReadOnlyTool(t *testing.T) {
+	harness := NewHarness()
+	found := false
+	for _, tool := range harness.Tools {
+		if tool.Name == "search_index" {
+			found = true
+			if !tool.ReadOnly || !strings.Contains(tool.Description, "元数据") {
+				t.Fatalf("index tool must be read-only metadata search: %+v", tool)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("harness did not register search_index")
+	}
+}
+
+func TestIndexPromptUsesControlledIndexTool(t *testing.T) {
+	plan := NewHarness().Plan(context.Background(), "查询本地索引里的合同")
+	if len(plan.Steps) != 1 || plan.Steps[0].Tool != "search_index" {
+		t.Fatalf("expected index query to use search_index, got %+v", plan)
+	}
+}
+
 func TestRedactSecrets(t *testing.T) {
 	got := redactSecrets("token=abc password=hunter2 status=ok")
 	if strings.Contains(got, "abc") || strings.Contains(got, "hunter2") || !strings.Contains(got, "[REDACTED]") {
