@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -379,6 +380,7 @@ func (s *Store) appendEvent(sessionID, eventType string, data any) Event {
 // Persisted tasks are marked cancelled so a restart never needs to infer a
 // shutdown as an unfinished execution.
 func (s *Server) StopBackgroundWork() {
+	s.stopping.Store(true)
 	s.taskMu.Lock()
 	taskCancels := make(map[string]context.CancelFunc, len(s.tasksCtx))
 	for id, cancel := range s.tasksCtx {
@@ -604,6 +606,7 @@ type Server struct {
 	taskMu          sync.Mutex
 	tasksCtx        map[string]context.CancelFunc
 	workers         sync.WaitGroup
+	stopping        atomic.Bool
 	downloadMu      sync.Mutex
 	downloadsCtx    map[string]context.CancelFunc
 	rateMu          sync.Mutex
@@ -997,6 +1000,10 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items, "truncated": offset+len(items) < total, "nextOffset": offset + len(items)})
 	case http.MethodPost:
+		if s.stopping.Load() {
+			writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "应用正在关闭，暂不能创建任务")
+			return
+		}
 		var req taskCreateRequest
 		if err := decodeJSON(w, r, &req, s.config.MaxBodyBytes); err != nil {
 			writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
@@ -1273,6 +1280,10 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 	if len(parts) == 2 && parts[1] == "resume" {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+			return
+		}
+		if s.stopping.Load() {
+			writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "应用正在关闭，暂不能恢复任务")
 			return
 		}
 		if taskStatus == statusRunning || taskStatus == statusPlanning {

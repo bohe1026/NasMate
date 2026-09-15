@@ -282,6 +282,15 @@ func TestStopBackgroundWorkCancelsAndPersistsRunningTasks(t *testing.T) {
 	}
 }
 
+func TestStopBackgroundWorkRejectsNewTasks(t *testing.T) {
+	server := testServer()
+	server.StopBackgroundWork()
+	res := request(t, server, http.MethodPost, "/api/tasks", `{"prompt":"检查 NAS"}`)
+	if res.Code != http.StatusServiceUnavailable || !strings.Contains(res.Body.String(), "NAS_OFFLINE") {
+		t.Fatalf("shutdown admission gate failed: %d %s", res.Code, res.Body.String())
+	}
+}
+
 type cancelAwareStorage struct {
 	started     chan struct{}
 	release     chan struct{}
