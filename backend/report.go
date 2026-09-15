@@ -283,6 +283,10 @@ func (s *Server) handleHealthReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	report := s.buildHealthReport(r)
+	if r.Context().Err() != nil {
+		writeError(w, http.StatusRequestTimeout, "USER_CANCELLED", "健康报告读取已取消")
+		return
+	}
 	writeJSON(w, http.StatusOK, report)
 }
 
@@ -292,6 +296,10 @@ func (s *Server) handleGenerateHealthReport(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	report := s.buildHealthReport(r)
+	if r.Context().Err() != nil {
+		writeError(w, http.StatusRequestTimeout, "USER_CANCELLED", "健康报告生成已取消")
+		return
+	}
 	artifact := ""
 	if s.config.DataDir != "" {
 		if err := s.persistHealthReport(report); err != nil {

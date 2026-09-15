@@ -144,3 +144,17 @@ func TestStorageGrowthIgnoresNewPathsUntilNextSnapshot(t *testing.T) {
 		t.Fatalf("new path was counted as growth: %+v", got)
 	}
 }
+
+func TestHealthReportEndpointsReportCancellation(t *testing.T) {
+	server := testServer()
+	for _, path := range []string{"/api/reports/health", "/api/reports/health/generate"} {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		req := httptest.NewRequest(map[bool]string{true: http.MethodPost, false: http.MethodGet}[path == "/api/reports/health/generate"], path, nil).WithContext(ctx)
+		res := httptest.NewRecorder()
+		server.ServeHTTP(res, req)
+		if res.Code != http.StatusRequestTimeout {
+			t.Fatalf("%s cancellation mismatch: %d %s", path, res.Code, res.Body.String())
+		}
+	}
+}
