@@ -313,7 +313,32 @@ func NewStoreWithState(statePath, eventLogPath string) *Store {
 		statePath: statePath,
 	}
 	store.load()
+	store.reconcileInterruptedRuns()
 	return store
+}
+
+func (s *Store) reconcileInterruptedRuns() {
+	var interrupted []string
+	s.mu.Lock()
+	for id, task := range s.tasks {
+		if task.Status == statusRunning {
+			task.Status = statusFailed
+			task.Summary = "服务重启中断，未继续执行；请重新发起任务"
+			task.UpdatedAt = time.Now().UTC()
+			interrupted = append(interrupted, id)
+		}
+	}
+	for id, download := range s.downloads {
+		if download.Status == statusRunning {
+			download.Status = statusFailed
+			download.ErrorCode = "TASK_INTERRUPTED"
+			interrupted = append(interrupted, id)
+		}
+	}
+	s.mu.Unlock()
+	for _, id := range interrupted {
+		s.appendEvent(id, "session.failed", map[string]string{"code": "TASK_INTERRUPTED", "summary": "服务重启中断，未自动继续执行"})
+	}
 }
 
 func (s *Store) appendEvent(sessionID, eventType string, data any) Event {
