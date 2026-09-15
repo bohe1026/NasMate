@@ -193,6 +193,19 @@ func TestTaskEventsAreBoundedAndPaginated(t *testing.T) {
 	}
 }
 
+func TestSessionEventsHaveRetentionLimit(t *testing.T) {
+	server := testServer()
+	for i := 0; i < maxSessionEvents+25; i++ {
+		server.store.appendEvent("retained", "task.progress", map[string]int{"step": i})
+	}
+	server.store.mu.RLock()
+	events := append([]Event(nil), server.store.events["retained"]...)
+	server.store.mu.RUnlock()
+	if len(events) != maxSessionEvents || events[0].Data.(map[string]int)["step"] != 25 {
+		t.Fatalf("event retention limit failed: len=%d first=%v", len(events), events[0].Data)
+	}
+}
+
 func TestTaskEventsRejectCursorBeyondSession(t *testing.T) {
 	server := testServer()
 	server.store.mu.Lock()

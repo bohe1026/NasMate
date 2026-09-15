@@ -24,12 +24,13 @@ import (
 )
 
 const (
-	statusPlanning  = "规划中"
-	statusRunning   = "运行中"
-	statusPending   = "待确认"
-	statusCompleted = "已完成"
-	statusCancelled = "已取消"
-	statusFailed    = "失败"
+	statusPlanning   = "规划中"
+	statusRunning    = "运行中"
+	statusPending    = "待确认"
+	statusCompleted  = "已完成"
+	statusCancelled  = "已取消"
+	statusFailed     = "失败"
+	maxSessionEvents = 1000
 )
 
 var (
@@ -370,6 +371,9 @@ func (s *Store) appendEvent(sessionID, eventType string, data any) Event {
 	s.sequence++
 	event := Event{ID: s.sequence, Type: eventType, CreatedAt: time.Now().UTC(), Data: data}
 	s.events[sessionID] = append(s.events[sessionID], event)
+	if len(s.events[sessionID]) > maxSessionEvents {
+		s.events[sessionID] = s.events[sessionID][len(s.events[sessionID])-maxSessionEvents:]
+	}
 	s.mu.Unlock()
 	s.sink.Append(sessionID, event)
 	s.persist()
