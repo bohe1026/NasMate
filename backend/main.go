@@ -38,6 +38,26 @@ var (
 	errProviderUnavailable = errors.New("provider unavailable")
 )
 
+func parsePageParams(values url.Values, defaultLimit, maxLimit int) (int, int, error) {
+	limit := defaultLimit
+	if raw := values.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > maxLimit {
+			return 0, 0, fmt.Errorf("limit 必须在 1 到 %d 之间", maxLimit)
+		}
+		limit = parsed
+	}
+	offset := 0
+	if raw := values.Get("offset"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			return 0, 0, errors.New("offset 必须是非负整数")
+		}
+		offset = parsed
+	}
+	return limit, offset, nil
+}
+
 type Config struct {
 	Addr           string
 	DevMode        bool
@@ -754,7 +774,12 @@ func (s *Server) handleIndexSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "应用数据目录不可用")
 		return
 	}
-	items, err := s.searchMetadataIndex(r.URL.Query().Get("keyword"))
+	limit, offset, err := parsePageParams(r.URL.Query(), 100, 100)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
+		return
+	}
+	items, total, err := s.searchMetadataIndexPage(r.URL.Query().Get("keyword"), limit, offset)
 	if errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "索引尚未生成")
 		return
@@ -763,40 +788,46 @@ func (s *Server) handleIndexSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "索引不可用")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items), "readMode": "metadata-only", "source": "local-index"})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset, "truncated": offset+len(items) < total, "readMode": "metadata-only", "source": "local-index"})
 }
 
 func (s *Server) searchMetadataIndex(keyword string) ([]FileMetadata, error) {
+	items, _, err := s.searchMetadataIndexPage(keyword, 100, 0)
+	return items, err
+}
+
+func (s *Server) searchMetadataIndexPage(keyword string, limit, offset int) ([]FileMetadata, int, error) {
 	if s.config.DataDir == "" {
-		return nil, errProviderUnavailable
+		return nil, 0, errProviderUnavailable
 	}
 	data, err := os.ReadFile(filepath.Join(s.config.DataDir, "metadata-index.json"))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, errNotFound
+		return nil, 0, errNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read metadata index: %w", err)
+		return nil, 0, fmt.Errorf("read metadata index: %w", err)
 	}
 	var index struct {
 		Items []FileMetadata `json:"items"`
 	}
 	if err := json.Unmarshal(data, &index); err != nil {
-		return nil, fmt.Errorf("decode metadata index: %w", err)
+		return nil, 0, fmt.Errorf("decode metadata index: %w", err)
 	}
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
 	items := make([]FileMetadata, 0)
+	total := 0
 	for _, item := range index.Items {
 		if !s.authorizePath(item.Path) {
 			continue
 		}
 		if keyword == "" || strings.Contains(strings.ToLower(item.Name), keyword) {
-			items = append(items, item)
-			if len(items) == 100 {
-				break
+			total++
+			if total > offset && len(items) < limit {
+				items = append(items, item)
 			}
 		}
 	}
-	return items, nil
+	return items, total, nil
 }
 
 func (s *Server) handleValidateSources(w http.ResponseWriter, r *http.Request) {

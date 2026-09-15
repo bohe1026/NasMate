@@ -441,6 +441,43 @@ func TestIndexRebuildPersistsMetadataOnly(t *testing.T) {
 	}
 }
 
+func TestIndexSearchPaginatesAuthorizedMatches(t *testing.T) {
+	root := t.TempDir()
+	items := make([]FileMetadata, 0, 105)
+	for i := 0; i < 105; i++ {
+		name := fmt.Sprintf("note-%03d.txt", i)
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, FileMetadata{Name: name, Path: path, Extension: ".txt"})
+	}
+	dataDir := filepath.Join(root, "data")
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]any{"generatedAt": time.Now().UTC(), "items": items})
+	if err := os.WriteFile(filepath.Join(dataDir, "metadata-index.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: dataDir, MaxBodyBytes: 1 << 20})
+	res := request(t, server, http.MethodGet, "/api/index/search?keyword=note&limit=100&offset=100", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected paged search, got %d: %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Items     []FileMetadata `json:"items"`
+		Total     int            `json:"total"`
+		Truncated bool           `json:"truncated"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Total != 105 || len(body.Items) != 5 || body.Truncated {
+		t.Fatalf("unexpected page: total=%d items=%d truncated=%v", body.Total, len(body.Items), body.Truncated)
+	}
+}
+
 func TestValidPlanRejectsUnsafeShape(t *testing.T) {
 	tools := NewHarness().Tools
 	if validPlan(AgentPlan{Status: "success", Steps: []PlanStep{{Tool: "search_files"}}}, tools) {
