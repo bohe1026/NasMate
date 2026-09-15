@@ -134,6 +134,13 @@ func TestCancelRunningTaskStopsReadOnlyToolAndKeepsCancelledState(t *testing.T) 
 	case <-time.After(3 * time.Second):
 		t.Fatal("task creation did not finish after cancellation")
 	}
+	server.store.mu.RLock()
+	defer server.store.mu.RUnlock()
+	for _, event := range server.store.events[id] {
+		if event.Type == "tool.result" {
+			t.Fatalf("cancelled task recorded a tool result after cancellation: %+v", event)
+		}
+	}
 }
 
 func TestExpensiveEndpointRateLimit(t *testing.T) {
@@ -400,7 +407,8 @@ func TestExecuteTaskRunsMultipleReadOnlySteps(t *testing.T) {
 	now := time.Now().UTC()
 	task := &Task{ID: "multi-step", Prompt: "检查 NAS", Status: statusRunning, CreatedAt: now, UpdatedAt: now, User: User{ID: "dev-user"}}
 	server.store.tasks[task.ID] = task
-	server.executeTask(task.ID, task.Prompt, AgentPlan{Status: "success", Steps: []PlanStep{
+	ctx, cancel := context.WithCancel(context.Background())
+	server.executeTask(ctx, cancel, task.ID, task.Prompt, AgentPlan{Status: "success", Steps: []PlanStep{
 		{Tool: "storage_usage", Reason: "容量"},
 		{Tool: "inspect_containers", Reason: "容器"},
 	}})

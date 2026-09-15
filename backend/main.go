@@ -493,6 +493,8 @@ type Server struct {
 	docker          DockerProvider
 	backup          BackupProvider
 	harness         *Harness
+	taskMu          sync.Mutex
+	tasksCtx        map[string]context.CancelFunc
 	downloadMu      sync.Mutex
 	downloadsCtx    map[string]context.CancelFunc
 	rateMu          sync.Mutex
@@ -512,7 +514,7 @@ func NewServer(config Config) *Server {
 		docker = MockDocker{}
 		backup = MockBackup{}
 	}
-	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness(), downloadsCtx: make(map[string]context.CancelFunc), rateBuckets: make(map[string]rateBucket), sourceTransport: newPublicTransport()}
+	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness(), tasksCtx: make(map[string]context.CancelFunc), downloadsCtx: make(map[string]context.CancelFunc), rateBuckets: make(map[string]rateBucket), sourceTransport: newPublicTransport()}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -815,6 +817,10 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().UTC()
 		plan := s.harness.Plan(r.Context(), strings.TrimSpace(req.Prompt))
 		task := &Task{ID: newID("task"), Prompt: strings.TrimSpace(req.Prompt), Status: statusRunning, Summary: plan.Summary, CreatedAt: now, UpdatedAt: now, User: user}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		s.taskMu.Lock()
+		s.tasksCtx[task.ID] = cancel
+		s.taskMu.Unlock()
 		s.store.mu.Lock()
 		s.store.tasks[task.ID] = task
 		s.store.mu.Unlock()
@@ -825,17 +831,22 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		s.store.appendEvent(task.ID, "task.progress", map[string]string{"message": "已完成权限检查"})
 		// Execute read-only plans before responding so persisted state is durable
 		// when a caller immediately restarts the application.
-		s.executeTask(task.ID, task.Prompt, plan)
+		s.executeTask(ctx, cancel, task.ID, task.Prompt, plan)
 		writeJSON(w, http.StatusCreated, task)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
 	}
 }
 
-func (s *Server) executeTask(id, prompt string, plan AgentPlan) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+func (s *Server) executeTask(ctx context.Context, cancel context.CancelFunc, id, prompt string, plan AgentPlan) {
+	defer func() {
+		s.taskMu.Lock()
+		delete(s.tasksCtx, id)
+		s.taskMu.Unlock()
+		cancel()
+	}()
 	if len(plan.Steps) == 0 {
+		s.finishTask(id, statusFailed, "没有可执行的工具步骤")
 		return
 	}
 	readOnlySteps := 0
@@ -849,6 +860,9 @@ func (s *Server) executeTask(id, prompt string, plan AgentPlan) {
 		return
 	}
 	for index, step := range plan.Steps {
+		if ctx.Err() != nil {
+			return
+		}
 		// Keep the execution budget bounded even if a provider returns an
 		// unexpectedly large plan. Only registered tools can reach this switch.
 		if index >= 3 {
@@ -862,6 +876,9 @@ func (s *Server) executeTask(id, prompt string, plan AgentPlan) {
 		}
 		s.store.appendEvent(id, "tool.call", map[string]any{"name": step.Tool, "input": map[string]string{"prompt": prompt}})
 		result, err := s.executeReadOnlyTool(ctx, step.Tool, prompt)
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return
+		}
 		if err != nil {
 			s.store.appendEvent(id, "tool.result", map[string]any{"status": "error", "summary": "工具不可用", "next_actions": []string{"检查授权目录或系统能力后重试"}})
 			s.finishTask(id, statusFailed, "工具执行失败：请检查授权范围或系统能力")
@@ -903,10 +920,12 @@ func extractSearchKeyword(prompt string) string {
 func (s *Server) finishTask(id, status, summary string) {
 	s.store.mu.Lock()
 	task, ok := s.store.tasks[id]
-	if ok {
+	if ok && task.Status == statusRunning {
 		task.Status = status
 		task.Summary = summary
 		task.UpdatedAt = time.Now().UTC()
+	} else {
+		ok = false
 	}
 	s.store.mu.Unlock()
 	if ok {
@@ -961,6 +980,12 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 		task.UpdatedAt = time.Now().UTC()
 		taskCopy = *task
 		s.store.mu.Unlock()
+		s.taskMu.Lock()
+		cancel := s.tasksCtx[id]
+		s.taskMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
 		s.store.persist()
 		s.store.appendEvent(id, "task.cancelled", map[string]string{"userId": user.ID})
 		writeJSON(w, http.StatusOK, &taskCopy)
