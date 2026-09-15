@@ -107,7 +107,7 @@ it('offers a manual retry for an interrupted task without replaying it automatic
 it('explains interrupted downloads without silently reusing approval', async () => {
   const interrupted = { id: 'download-1', targetDirectory: '/photos', sources: [{ title: '素材', url: 'https://example.com/image.jpg', license: 'CC0', sizeBytes: 1024 }], estimatedBytes: 1024, status: '失败', errorCode: 'TASK_INTERRUPTED' }
   const fallback = fetchMock.getMockImplementation()!
-  fetchMock.mockImplementation(async (input, init) => String(input) === '/api/downloads' ? Response.json({ items: [interrupted] }) : fallback(input, init))
+  fetchMock.mockImplementation(async (input, init) => String(input).startsWith('/api/downloads?') ? Response.json({ items: [interrupted] }) : fallback(input, init))
   const user = userEvent.setup()
   render(<App />)
   await user.click(screen.getByRole('button', { name: '下载任务' }))

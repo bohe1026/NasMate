@@ -90,7 +90,7 @@ function App() {
     let live = true
     void apiFetch('/api/tasks').then(readJSON<{ items: Task[]; truncated?: boolean; nextOffset?: number }>).then((data) => { if (live) { setTasks(data.items ?? []); setTasksHasMore(Boolean(data.truncated)); setTasksOffset(data.nextOffset ?? (data.items?.length ?? 0)); setTasksState('ready') } }).catch(() => { if (live) setTasksState('error') })
     void apiFetch('/api/storage/usage').then(readJSON<Usage>).then((data) => { if (live) { setUsage(data); setUsageState('ready') } }).catch(() => { if (live) setUsageState('error') })
-    void apiFetch('/api/downloads').then(readJSON<{ items: DownloadPlan[] }>).then((data) => { if (live) { setPlans(data.items ?? []); setPlansState('ready') } }).catch(() => { if (live) setPlansState('error') })
+    void apiFetch('/api/downloads?limit=30&offset=0').then(readJSON<{ items: DownloadPlan[] }>).then((data) => { if (live) { setPlans(data.items ?? []); setPlansState('ready') } }).catch(() => { if (live) setPlansState('error') })
     void apiFetch('/api/artifacts').then(readJSON<{ items: Artifact[] }>).then((data) => { if (live) setArtifacts(data.items ?? []) }).catch(() => undefined)
     void apiFetch('/api/models/status').then(readJSON<ModelStatus>).then((data) => { if (live) setModelStatus(data) }).catch(() => undefined)
     void apiFetch('/api/index/status').then(readJSON<IndexStatus>).then((data) => { if (live) setIndexStatus(data) }).catch(() => undefined)
@@ -117,7 +117,7 @@ function App() {
   useEffect(() => {
     if (page !== 'downloads' || !plans.some((plan) => plan.status === '运行中')) return
     const timer = window.setInterval(() => {
-      void apiFetch('/api/downloads').then(readJSON<{ items: DownloadPlan[] }>).then((data) => setPlans(data.items ?? [])).catch(() => undefined)
+      void apiFetch('/api/downloads?limit=30&offset=0').then(readJSON<{ items: DownloadPlan[] }>).then((data) => setPlans(data.items ?? [])).catch(() => undefined)
     }, 5000)
     return () => window.clearInterval(timer)
   }, [page, plans])
