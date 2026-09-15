@@ -52,6 +52,7 @@ function App() {
   const [tasksState, setTasksState] = useState('loading')
   const [tasksHasMore, setTasksHasMore] = useState(false)
   const [tasksOffset, setTasksOffset] = useState(0)
+  const [tasksLoadingMore, setTasksLoadingMore] = useState(false)
   const [historySearch, setHistorySearch] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -74,6 +75,7 @@ function App() {
   const [eventsRevision, setEventsRevision] = useState(0)
   const [eventsBefore, setEventsBefore] = useState<number | null>(null)
   const [eventsHasMore, setEventsHasMore] = useState(false)
+  const taskPageRequest = useRef(0)
   const composer = useRef<HTMLTextAreaElement>(null)
   const appearance = useRef<HTMLDialogElement>(null)
   const permissions = useRef<HTMLDialogElement>(null)
@@ -132,10 +134,16 @@ function App() {
   function handleSuggestion(prompt: string) { navigate('home'); setInput(prompt); requestAnimationFrame(() => composer.current?.focus()) }
   function selectTask(id: string) { setEvents([]); setEventsBefore(null); setEventsHasMore(false); setEventsState('loading'); setActiveId(id) }
   async function loadMoreTasks() {
+    if (tasksLoadingMore) return
+    setTasksLoadingMore(true)
+    const requestId = ++taskPageRequest.current
+    const requestedOffset = tasksOffset
     try {
-      const data = await apiFetch(`/api/tasks?limit=100&offset=${tasksOffset}`).then(readJSON<{ items: Task[]; truncated?: boolean; nextOffset?: number }>)
-      setTasks((current) => [...current, ...(data.items ?? []).filter((item) => !current.some((existing) => existing.id === item.id))]); setTasksHasMore(Boolean(data.truncated)); setTasksOffset(data.nextOffset ?? tasksOffset + (data.items?.length ?? 0))
-    } catch { setError('更早的任务暂时无法读取。') }
+      const data = await apiFetch(`/api/tasks?limit=100&offset=${requestedOffset}`).then(readJSON<{ items: Task[]; truncated?: boolean; nextOffset?: number }>)
+      if (requestId !== taskPageRequest.current) return
+      setTasks((current) => [...current, ...(data.items ?? []).filter((item) => !current.some((existing) => existing.id === item.id))]); setTasksHasMore(Boolean(data.truncated)); setTasksOffset(data.nextOffset ?? requestedOffset + (data.items?.length ?? 0))
+    } catch { if (requestId === taskPageRequest.current) setError('更早的任务暂时无法读取。') }
+    finally { if (requestId === taskPageRequest.current) setTasksLoadingMore(false) }
   }
   async function loadOlderEvents() {
     if (!activeId || !eventsBefore) return
@@ -222,7 +230,7 @@ function App() {
           {searchOpen && <input className="history-search" aria-label="搜索最近任务" placeholder="搜索任务…" value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} />}
           <div className="history-list">
             {filteredTasks.map((task) => <button key={task.id} title={task.prompt} className={`history-item ${activeId === task.id ? 'is-active' : ''}`} onClick={() => { navigate('home'); selectTask(task.id) }}><MessageSquare size={15} /><span>{task.prompt}</span></button>)}
-            {tasksHasMore && !historySearch && <button className="text-button history-more" onClick={() => void loadMoreTasks()}>加载更早任务</button>}
+            {tasksHasMore && !historySearch && <button className="text-button history-more" onClick={() => void loadMoreTasks()} disabled={tasksLoadingMore}>{tasksLoadingMore ? '正在读取…' : '加载更早任务'}</button>}
             {!filteredTasks.length && <div className="history-empty"><History size={21} /><p>{tasksState === 'loading' ? '正在读取任务…' : tasksState === 'error' ? '暂时无法读取历史任务' : historySearch ? '没有匹配的任务' : '你的下一件小事，从这里开始。'}</p></div>}
           </div>
         </div>
