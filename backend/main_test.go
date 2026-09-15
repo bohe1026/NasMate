@@ -445,6 +445,22 @@ func TestIndexStatusIsMetadataOnly(t *testing.T) {
 	}
 }
 
+func TestIndexStatusDistinguishesUnavailableIndex(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "data")
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dataDir, "metadata-index.json"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: dataDir})
+	res := request(t, server, http.MethodGet, "/api/index/status", "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"status":"unavailable"`) {
+		t.Fatalf("unavailable index was misreported: %d %s", res.Code, res.Body.String())
+	}
+}
+
 func TestIndexRebuildPersistsMetadataOnly(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("private"), 0600); err != nil {

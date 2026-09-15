@@ -735,6 +735,8 @@ func (s *Server) handleIndexStatus(w http.ResponseWriter, r *http.Request) {
 			} else {
 				status = "unavailable"
 			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			status = "unavailable"
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
