@@ -762,3 +762,32 @@ func TestStorePersistsTasksAndEvents(t *testing.T) {
 		t.Fatalf("events were not restored: %+v", restarted.store.events[created.ID])
 	}
 }
+
+func TestStoreMarksInterruptedRunsFailedAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	statePath := filepath.Join(root, "state.json")
+	eventPath := filepath.Join(root, "events.jsonl")
+	before := NewStoreWithState(statePath, eventPath)
+	now := time.Now().UTC()
+	before.tasks["running-task"] = &Task{ID: "running-task", Prompt: "检查 NAS 空间", Status: statusRunning, CreatedAt: now, UpdatedAt: now, User: User{ID: "user"}}
+	before.downloads["running-download"] = &DownloadPlan{ID: "running-download", Status: statusRunning, User: User{ID: "user"}}
+	before.persist()
+
+	after := NewStoreWithState(statePath, eventPath)
+	if after.tasks["running-task"].Status != statusFailed || !strings.Contains(after.tasks["running-task"].Summary, "重新发起") {
+		t.Fatalf("interrupted task was not recoverable: %+v", after.tasks["running-task"])
+	}
+	if after.downloads["running-download"].Status != statusFailed || after.downloads["running-download"].ErrorCode == "" {
+		t.Fatalf("interrupted download still appears active: %+v", after.downloads["running-download"])
+	}
+	if len(after.events["running-task"]) != 1 || after.events["running-task"][0].Type != "session.failed" {
+		t.Fatalf("task interruption not audited: %+v", after.events["running-task"])
+	}
+	if len(after.events["running-download"]) != 1 || after.events["running-download"][0].Type != "session.failed" {
+		t.Fatalf("download interruption not audited: %+v", after.events["running-download"])
+	}
+	reopened := NewStoreWithState(statePath, eventPath)
+	if len(reopened.events["running-task"]) != 1 || reopened.tasks["running-task"].Status != statusFailed {
+		t.Fatalf("restart reconciliation was not persisted: %+v", reopened.events["running-task"])
+	}
+}
