@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -68,6 +69,70 @@ func TestCancelFinishedTaskIsRejected(t *testing.T) {
 	res = request(t, server, http.MethodPost, "/api/tasks/"+task.ID+"/cancel", "")
 	if res.Code != http.StatusConflict {
 		t.Fatalf("expected finished task cancellation to be rejected, got %d: %s", res.Code, res.Body.String())
+	}
+}
+
+type cancelAwareStorage struct {
+	started     chan struct{}
+	release     chan struct{}
+	seenContext chan error
+}
+
+func (storage cancelAwareStorage) Usage(ctx context.Context) (StorageUsage, error) {
+	close(storage.started)
+	<-storage.release
+	storage.seenContext <- ctx.Err()
+	return StorageUsage{}, ctx.Err()
+}
+
+func (cancelAwareStorage) Search(context.Context, FileSearchOptions) ([]FileMetadata, error) {
+	return nil, nil
+}
+
+func TestCancelRunningTaskStopsReadOnlyToolAndKeepsCancelledState(t *testing.T) {
+	server := testServer()
+	provider := cancelAwareStorage{started: make(chan struct{}), release: make(chan struct{}), seenContext: make(chan error, 1)}
+	server.storage = provider
+	created := make(chan *httptest.ResponseRecorder, 1)
+	go func() { created <- request(t, server, http.MethodPost, "/api/tasks", `{"prompt":"检查 NAS 空间"}`) }()
+	select {
+	case <-provider.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("read-only tool did not start")
+	}
+	server.store.mu.RLock()
+	var id string
+	for taskID := range server.store.tasks {
+		id = taskID
+	}
+	server.store.mu.RUnlock()
+	if id == "" {
+		t.Fatal("task not persisted before tool execution")
+	}
+	cancelled := request(t, server, http.MethodPost, "/api/tasks/"+id+"/cancel", "")
+	if cancelled.Code != http.StatusOK {
+		t.Fatalf("expected cancellation, got %d: %s", cancelled.Code, cancelled.Body.String())
+	}
+	close(provider.release)
+	select {
+	case err := <-provider.seenContext:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("tool context was not cancelled: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("tool did not observe cancellation")
+	}
+	select {
+	case result := <-created:
+		var task Task
+		if err := json.Unmarshal(result.Body.Bytes(), &task); err != nil {
+			t.Fatal(err)
+		}
+		if task.Status != statusCancelled {
+			t.Fatalf("finished tool overwrote cancelled state: %+v", task)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("task creation did not finish after cancellation")
 	}
 }
 
