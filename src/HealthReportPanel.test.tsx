@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { apiFetch } from './api'
 import { HealthReportPanel } from './HealthReportPanel'
 
@@ -34,5 +35,13 @@ describe('health report snapshot', () => {
     expect(screen.getByText(/只读报告/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /修复|重启|执行/ })).toBeNull()
     expect(fetchMock).toHaveBeenCalledWith('/api/reports/health')
+  })
+
+  it('refreshes the snapshot on demand', async () => {
+    const user = userEvent.setup()
+    render(<HealthReportPanel />)
+    await screen.findByText('有一个容器需要关注')
+    await user.click(screen.getByRole('button', { name: '刷新健康日报' }))
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
