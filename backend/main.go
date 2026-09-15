@@ -756,6 +756,10 @@ func (s *Server) handleIndexRebuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, err := s.storage.Search(r.Context(), FileSearchOptions{MaxResults: 100000})
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || r.Context().Err() != nil {
+		writeError(w, http.StatusRequestTimeout, "USER_CANCELLED", "索引重建已取消")
+		return
+	}
 	if err != nil && !errors.Is(err, errSearchLimit) {
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取文件元数据")
 		return

@@ -464,6 +464,27 @@ func TestIndexRebuildPersistsMetadataOnly(t *testing.T) {
 	}
 }
 
+type cancelledIndexStorage struct{}
+
+func (cancelledIndexStorage) Usage(context.Context) (StorageUsage, error) { return StorageUsage{}, nil }
+func (cancelledIndexStorage) Search(ctx context.Context, _ FileSearchOptions) ([]FileMetadata, error) {
+	return nil, ctx.Err()
+}
+
+func TestIndexRebuildReportsCancellation(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: filepath.Join(root, "data")})
+	server.storage = cancelledIndexStorage{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/api/index/rebuild", nil).WithContext(ctx)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusRequestTimeout || !strings.Contains(res.Body.String(), "USER_CANCELLED") {
+		t.Fatalf("cancellation was not reported: %d %s", res.Code, res.Body.String())
+	}
+}
+
 func TestIndexSearchPaginatesAuthorizedMatches(t *testing.T) {
 	root := t.TempDir()
 	items := make([]FileMetadata, 0, 105)
