@@ -73,7 +73,7 @@ func (s *Server) handleOrganizeDryRun(w http.ResponseWriter, r *http.Request) {
 	for _, file := range files {
 		var folder string
 		if req.Mode == "duplicate" {
-			key := file.Name + ":" + strconv.FormatInt(file.SizeBytes, 10)
+			key := strconv.FormatInt(file.SizeBytes, 10) + ":" + file.Extension
 			if previous, ok := duplicateSeen[key]; ok {
 				skipped = append(skipped, file.Path+"（疑似重复，参考："+previous+"）")
 				continue
