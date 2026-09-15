@@ -951,7 +951,12 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		s.store.mu.RUnlock()
-		sort.Slice(items, func(i, j int) bool { return items[i].UpdatedAt.After(items[j].UpdatedAt) })
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].UpdatedAt.Equal(items[j].UpdatedAt) {
+				return items[i].ID > items[j].ID
+			}
+			return items[i].UpdatedAt.After(items[j].UpdatedAt)
+		})
 		limit := 100
 		if raw := r.URL.Query().Get("limit"); raw != "" {
 			parsed, err := strconv.Atoi(raw)
