@@ -156,6 +156,51 @@ func TestResumeTaskCannotCrossUsers(t *testing.T) {
 	}
 }
 
+func TestTaskEventsAreBoundedAndPaginated(t *testing.T) {
+	server := testServer()
+	for i := 0; i < 205; i++ {
+		server.store.appendEvent("events", "task.progress", map[string]int{"step": i})
+	}
+	server.store.mu.Lock()
+	server.store.tasks["events"] = &Task{ID: "events", Prompt: "查看轨迹", Status: statusCompleted, User: User{ID: "dev-user"}}
+	server.store.mu.Unlock()
+	res := request(t, server, http.MethodGet, "/api/tasks/events/events?limit=200", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("events page failed: %d: %s", res.Code, res.Body.String())
+	}
+	var page struct {
+		Items      []Event `json:"items"`
+		Truncated  bool    `json:"truncated"`
+		NextBefore int64   `json:"nextBefore"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 200 || !page.Truncated || page.NextBefore == 0 || page.Items[0].ID != 6 {
+		t.Fatalf("unexpected first page: %+v", page)
+	}
+	res = request(t, server, http.MethodGet, fmt.Sprintf("/api/tasks/events/events?limit=10&before=%d", page.NextBefore), "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"step":4`) {
+		t.Fatalf("previous page failed: %d: %s", res.Code, res.Body.String())
+	}
+	res = request(t, server, http.MethodGet, "/api/tasks/events/events?limit=201", "")
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("oversized page was accepted: %d", res.Code)
+	}
+}
+
+func TestTaskEventsRejectCursorBeyondSession(t *testing.T) {
+	server := testServer()
+	server.store.mu.Lock()
+	server.store.tasks["events-cursor"] = &Task{ID: "events-cursor", Prompt: "查看轨迹", Status: statusCompleted, User: User{ID: "dev-user"}}
+	server.store.mu.Unlock()
+	server.store.appendEvent("events-cursor", "task.progress", map[string]string{"ok": "yes"})
+	res := request(t, server, http.MethodGet, "/api/tasks/events-cursor/events?before=1&limit=10", "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"items":[]`) || strings.Contains(res.Body.String(), `"truncated":true`) {
+		t.Fatalf("invalid cursor was treated as a page: %d: %s", res.Code, res.Body.String())
+	}
+}
+
 type cancelAwareStorage struct {
 	started     chan struct{}
 	release     chan struct{}

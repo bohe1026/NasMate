@@ -1037,7 +1037,38 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"items": events})
+		limit := 200
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < 1 || parsed > 200 {
+				writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "limit 必须在 1 到 200 之间")
+				return
+			}
+			limit = parsed
+		}
+		before := int64(0)
+		if raw := r.URL.Query().Get("before"); raw != "" {
+			parsed, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil || parsed < 1 {
+				writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "before 必须是正整数事件 ID")
+				return
+			}
+			before = parsed
+		}
+		filtered := make([]Event, 0, min(len(events), limit))
+		for index := len(events) - 1; index >= 0 && len(filtered) < limit; index-- {
+			if before == 0 || events[index].ID < before {
+				filtered = append(filtered, events[index])
+			}
+		}
+		for left, right := 0, len(filtered)-1; left < right; left, right = left+1, right-1 {
+			filtered[left], filtered[right] = filtered[right], filtered[left]
+		}
+		nextBefore := int64(0)
+		if len(filtered) > 0 && len(filtered) == limit && filtered[0].ID > 1 {
+			nextBefore = filtered[0].ID
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": filtered, "truncated": nextBefore > 0, "nextBefore": nextBefore})
 		return
 	}
 	if len(parts) == 2 && parts[1] == "cancel" {

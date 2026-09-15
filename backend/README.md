@@ -29,7 +29,7 @@ Persistent task, download, and session state is stored below `UGAPP_DATA_DIR` (`
 - `GET|POST /api/tasks`
 - `GET /api/tasks/{id}`
 - `POST /api/tasks/{id}/resume`（从已结束任务创建关联的新会话）
-- `GET /api/tasks/{id}/events`
+- `GET /api/tasks/{id}/events?limit=1..200&before=<eventId>`（受控分页，默认最多 200 条）
 - `POST /api/tasks/{id}/cancel`
 - `GET /api/storage/usage`
 - `GET /api/files/search`

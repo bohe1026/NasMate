@@ -70,6 +70,8 @@ function App() {
   const [recoveryState, setRecoveryState] = useState('idle')
   const [generatingReport, setGeneratingReport] = useState(false)
   const [eventsRevision, setEventsRevision] = useState(0)
+  const [eventsBefore, setEventsBefore] = useState<number | null>(null)
+  const [eventsHasMore, setEventsHasMore] = useState(false)
   const composer = useRef<HTMLTextAreaElement>(null)
   const appearance = useRef<HTMLDialogElement>(null)
   const permissions = useRef<HTMLDialogElement>(null)
@@ -93,7 +95,7 @@ function App() {
   useEffect(() => {
     if (!activeId) return
     let live = true
-    void apiFetch(`/api/tasks/${encodeURIComponent(activeId)}/events`).then(readJSON<{ items: TaskEvent[] }>).then((data) => { if (live) { setEvents(data.items ?? []); setEventsState('ready') } }).catch(() => { if (live) setEventsState('error') })
+    void apiFetch(`/api/tasks/${encodeURIComponent(activeId)}/events`).then(readJSON<{ items: TaskEvent[]; truncated?: boolean; nextBefore?: number }>).then((data) => { if (live) { setEvents(data.items ?? []); setEventsHasMore(Boolean(data.truncated)); setEventsBefore(data.nextBefore || null); setEventsState('ready') } }).catch(() => { if (live) setEventsState('error') })
     return () => { live = false }
   }, [activeId, eventsRevision])
   useEffect(() => {
@@ -126,7 +128,14 @@ function App() {
   function navigate(next: Page) { setPage(next); setActiveId(null); setMobileOpen(false); setError('') }
   function newTask() { navigate('home'); setInput(''); requestAnimationFrame(() => composer.current?.focus()) }
   function handleSuggestion(prompt: string) { navigate('home'); setInput(prompt); requestAnimationFrame(() => composer.current?.focus()) }
-  function selectTask(id: string) { setEvents([]); setEventsState('loading'); setActiveId(id) }
+  function selectTask(id: string) { setEvents([]); setEventsBefore(null); setEventsHasMore(false); setEventsState('loading'); setActiveId(id) }
+  async function loadOlderEvents() {
+    if (!activeId || !eventsBefore) return
+    try {
+      const data = await apiFetch(`/api/tasks/${encodeURIComponent(activeId)}/events?limit=200&before=${eventsBefore}`).then(readJSON<{ items: TaskEvent[]; truncated?: boolean; nextBefore?: number }>)
+      setEvents((current) => [...(data.items ?? []), ...current]); setEventsHasMore(Boolean(data.truncated)); setEventsBefore(data.nextBefore || null)
+    } catch { setError('更早的执行轨迹暂时无法读取。') }
+  }
   async function submit(event: FormEvent) {
     event.preventDefault()
     const prompt = input.trim()
@@ -218,7 +227,7 @@ function App() {
       <main id="workspace-main" className="workspace-main">
         <header className="workspace-header"><div><button ref={menuButton} className="icon-button mobile-menu" aria-label="打开导航菜单" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)}><PanelLeft size={20} /></button><span className="header-label">{activeTask ? '任务 / ' + activeTask.prompt : '个人工作台'}</span></div><div className="header-actions"><span className="model-status"><span />{modelStatus ? `${modelStatus.provider} · ${modelStatus.model}` : '模型状态读取中'}</span><button className="theme-shortcut" onClick={() => appearance.current?.showModal()}><Palette size={15} /><span>装扮工作台</span></button></div></header>
         {page === 'home' && <section className={`home-content ${activeTask ? 'has-task' : ''}`}>
-          {activeTask ? <div className="task-conversation"><button className="text-button" onClick={newTask}>← 返回工作台</button><h1>{activeTask.prompt}</h1><div className="task-answer"><span className="answer-avatar"><Sparkles size={20} /></span><div><strong>NasMate <span className="status-tag">{activeTask.status}</span></strong><p>{activeTask.summary}</p></div>{(activeTask.status === '运行中' || activeTask.status === '规划中') && <button className="task-cancel" onClick={() => void cancelTask(activeTask)}>取消任务</button>}{(activeTask.status === '失败' || activeTask.status === '已取消' || activeTask.status === '已完成') && <><button className="secondary-button task-retry" onClick={() => handleSuggestion(activeTask.prompt)}><RotateCcw size={14} />重新发起任务</button><button className="secondary-button task-retry" onClick={() => void resumeTask(activeTask)}><Plus size={14} />继续此任务</button></>}</div><details className="event-details"><summary><History size={15} />执行轨迹 <span>{events.length} 条记录</span></summary>{eventsState === 'error' ? <p>暂时无法读取轨迹。</p> : eventsState === 'loading' ? <p>正在读取…</p> : events.map((entry) => <div className="event-entry" key={entry.id}><strong>{entry.type}</strong><pre>{JSON.stringify(entry.data, null, 2)}</pre></div>)}</details></div> : <div className="welcome-heading"><span className="welcome-eyebrow"><span />YOUR EVERYDAY NAS COMPANION</span><h1>让琐事简单，<br />让生活<span className="accent-word">多一点空间<span className="heading-spark">✦</span></span>。</h1><p>你好，我是 NasMate。今天，有什么可以一起完成？</p></div>}
+          {activeTask ? <div className="task-conversation"><button className="text-button" onClick={newTask}>← 返回工作台</button><h1>{activeTask.prompt}</h1><div className="task-answer"><span className="answer-avatar"><Sparkles size={20} /></span><div><strong>NasMate <span className="status-tag">{activeTask.status}</span></strong><p>{activeTask.summary}</p></div>{(activeTask.status === '运行中' || activeTask.status === '规划中') && <button className="task-cancel" onClick={() => void cancelTask(activeTask)}>取消任务</button>}{(activeTask.status === '失败' || activeTask.status === '已取消' || activeTask.status === '已完成') && <><button className="secondary-button task-retry" onClick={() => handleSuggestion(activeTask.prompt)}><RotateCcw size={14} />重新发起任务</button><button className="secondary-button task-retry" onClick={() => void resumeTask(activeTask)}><Plus size={14} />继续此任务</button></>}</div><details className="event-details"><summary><History size={15} />执行轨迹 <span>{events.length} 条记录</span></summary>{eventsState === 'error' ? <p>暂时无法读取轨迹。</p> : eventsState === 'loading' ? <p>正在读取…</p> : <>{eventsHasMore && <button className="text-button events-older" onClick={() => void loadOlderEvents()}>加载更早记录</button>}{events.map((entry) => <div className="event-entry" key={entry.id}><strong>{entry.type}</strong><pre>{JSON.stringify(entry.data, null, 2)}</pre></div>)}</>}</details></div> : <div className="welcome-heading"><span className="welcome-eyebrow"><span />YOUR EVERYDAY NAS COMPANION</span><h1>让琐事简单，<br />让生活<span className="accent-word">多一点空间<span className="heading-spark">✦</span></span>。</h1><p>你好，我是 NasMate。今天，有什么可以一起完成？</p></div>}
           <form className="prompt-shell" onSubmit={submit}>
             <div className="prompt-box"><label className="sr-only" htmlFor="task-prompt">描述你的 NAS 任务</label><textarea id="task-prompt" ref={composer} value={input} disabled={submitting} maxLength={2000} placeholder={activeTask ? '开始另一项任务…' : '找一份文件，看看空间，或检查一次备份…'} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /><div className="prompt-toolbar"><button type="button" className="permission-button" onClick={() => permissions.current?.showModal()}><ShieldCheck size={17} />默认权限<ChevronDown size={12} /></button><div className="prompt-send"><span>{submitting ? '正在处理任务' : 'Enter 发送'}</span><button className="send-task" type="submit" aria-label="发送任务" disabled={input.trim().length < 2 || submitting}>{submitting ? <LoaderCircle className="spin" size={21} /> : <ArrowUp size={22} />}</button></div></div></div>
             <div className="prompt-context"><span><Monitor size={15} />NAS 工作区</span><i /><button type="button" onClick={() => permissions.current?.showModal()}><FolderOpen size={15} />已授权的文件夹<ChevronDown size={12} /></button><span className="prompt-local"><span />本地文件处理</span></div>
