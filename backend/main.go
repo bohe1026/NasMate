@@ -354,6 +354,59 @@ func (s *Store) appendEvent(sessionID, eventType string, data any) Event {
 	return event
 }
 
+// StopBackgroundWork cancels all in-flight work before the HTTP server exits.
+// Persisted tasks are marked cancelled so a restart never needs to infer a
+// shutdown as an unfinished execution.
+func (s *Server) StopBackgroundWork() {
+	s.taskMu.Lock()
+	taskCancels := make(map[string]context.CancelFunc, len(s.tasksCtx))
+	for id, cancel := range s.tasksCtx {
+		taskCancels[id] = cancel
+	}
+	s.taskMu.Unlock()
+	s.downloadMu.Lock()
+	downloadCancels := make(map[string]context.CancelFunc, len(s.downloadsCtx))
+	for id, cancel := range s.downloadsCtx {
+		downloadCancels[id] = cancel
+	}
+	s.downloadMu.Unlock()
+	for _, cancel := range taskCancels {
+		cancel()
+	}
+	for _, cancel := range downloadCancels {
+		cancel()
+	}
+	changedTasks := make([]string, 0, len(taskCancels))
+	changedDownloads := make([]string, 0, len(downloadCancels))
+	s.store.mu.Lock()
+	for id := range taskCancels {
+		if task, ok := s.store.tasks[id]; ok && (task.Status == statusPlanning || task.Status == statusRunning) {
+			task.Status = statusCancelled
+			task.Summary = "服务关闭，任务已取消；可重新发起"
+			task.UpdatedAt = time.Now().UTC()
+			changedTasks = append(changedTasks, id)
+		}
+	}
+	for id := range downloadCancels {
+		if plan, ok := s.store.downloads[id]; ok && plan.Status == statusRunning {
+			plan.Status = statusCancelled
+			plan.CurrentSource = ""
+			changedDownloads = append(changedDownloads, id)
+		}
+	}
+	s.store.mu.Unlock()
+	if len(changedTasks) == 0 && len(changedDownloads) == 0 {
+		return
+	}
+	s.store.persist()
+	for _, id := range changedTasks {
+		s.store.appendEvent(id, "task.cancelled", map[string]string{"reason": "service_shutdown"})
+	}
+	for _, id := range changedDownloads {
+		s.store.appendEvent(id, "task.cancelled", map[string]string{"reason": "service_shutdown", "kind": "download"})
+	}
+}
+
 func (s *Store) load() {
 	if s.statePath == "" {
 		return
@@ -1527,6 +1580,7 @@ func main() {
 		}
 	}()
 	<-stop
+	app.StopBackgroundWork()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {

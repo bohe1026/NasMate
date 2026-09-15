@@ -237,6 +237,28 @@ func TestTaskListIsPaginatedAndScoped(t *testing.T) {
 	}
 }
 
+func TestStopBackgroundWorkCancelsAndPersistsRunningTasks(t *testing.T) {
+	server := testServer()
+	ctx, cancel := context.WithCancel(context.Background())
+	server.taskMu.Lock()
+	server.tasksCtx["shutdown-task"] = cancel
+	server.taskMu.Unlock()
+	now := time.Now().UTC()
+	server.store.mu.Lock()
+	server.store.tasks["shutdown-task"] = &Task{ID: "shutdown-task", Prompt: "检查空间", Status: statusRunning, CreatedAt: now, UpdatedAt: now, User: User{ID: "dev-user"}}
+	server.store.mu.Unlock()
+	server.StopBackgroundWork()
+	if ctx.Err() == nil {
+		t.Fatal("running task context was not cancelled")
+	}
+	server.store.mu.RLock()
+	task := *server.store.tasks["shutdown-task"]
+	server.store.mu.RUnlock()
+	if task.Status != statusCancelled || !strings.Contains(task.Summary, "服务关闭") {
+		t.Fatalf("task was not safely cancelled: %+v", task)
+	}
+}
+
 type cancelAwareStorage struct {
 	started     chan struct{}
 	release     chan struct{}
