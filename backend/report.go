@@ -83,7 +83,6 @@ func storageGrowth(current, previous []UsageItem) []UsageGrowth {
 
 type Artifact struct {
 	Name      string    `json:"name"`
-	Path      string    `json:"path"`
 	SizeBytes int64     `json:"sizeBytes"`
 	CreatedAt time.Time `json:"createdAt"`
 }
@@ -163,7 +162,7 @@ func (s *Server) pruneHealthReports(keep int) error {
 	}
 	files := make([]reportFile, 0)
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "health-report-") || !strings.HasSuffix(entry.Name(), ".json") {
+		if !entry.Type().IsRegular() || !validHealthReportName(entry.Name()) {
 			continue
 		}
 		info, err := entry.Info()
@@ -203,7 +202,10 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 			if err != nil || info.Size() > maxHealthReportBytes {
 				continue
 			}
-			items = append(items, Artifact{Name: entry.Name(), Path: filepath.Join(s.config.DataDir, entry.Name()), SizeBytes: info.Size(), CreatedAt: info.ModTime().UTC()})
+			if info.Size() > maxHealthReportBytes {
+				continue
+			}
+			items = append(items, Artifact{Name: entry.Name(), SizeBytes: info.Size(), CreatedAt: info.ModTime().UTC()})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "readOnly": true})

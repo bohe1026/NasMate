@@ -107,6 +107,28 @@ func TestHealthReportComparesPreviousSnapshotAndCountsFailedDownloads(t *testing
 	}
 }
 
+func TestArtifactListDoesNotExposePathsOrUnsafeEntries(t *testing.T) {
+	root := t.TempDir()
+	name := "health-report-20260915-120000.json"
+	if err := os.WriteFile(filepath.Join(root, name), []byte(`{"readOnly":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "health-report-invalid.json"), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, name), filepath.Join(root, "health-report-20260915-120001.json")); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(Config{DevMode: true, DataDir: root})
+	res := request(t, server, http.MethodGet, "/api/artifacts", "")
+	if res.Code != http.StatusOK || strings.Contains(res.Body.String(), root) || strings.Contains(res.Body.String(), "health-report-invalid") || strings.Contains(res.Body.String(), "120001") {
+		t.Fatalf("unsafe artifact listing: %d %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), name) {
+		t.Fatalf("valid artifact missing: %s", res.Body.String())
+	}
+}
+
 func TestFirstHealthReportHasNoInventedGrowth(t *testing.T) {
 	server := NewServer(Config{DevMode: true, DataDir: t.TempDir()})
 	server.storage = fixedReportStorage{usage: StorageUsage{TopItems: []UsageItem{{Path: "/photos", SizeBytes: 100}}}}
