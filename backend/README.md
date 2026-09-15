@@ -38,6 +38,7 @@ Persistent task, download, and session state is stored below `UGAPP_DATA_DIR` (`
 - `GET /api/docker/containers`
 - `GET /api/backups/status`
 - `GET /api/backups/recovery-plan`
+- `POST /api/organize/dry-run`（`mode=date|extension|project|duplicate`，最多预览 1000 项，不执行文件变更）
 - `GET /api/models/status`
 - `GET /api/index/status`
 - `POST /api/index/rebuild`

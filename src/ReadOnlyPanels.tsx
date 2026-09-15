@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Archive, ChevronRight, Container, FileSearch, RefreshCw, ShieldCheck } from 'lucide-react'
 import { apiFetch } from './api'
@@ -80,10 +80,13 @@ export function FileSearchPanel() {
   const [result, setResult] = useState<FileSearchResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const controller = useRef<AbortController | null>(null)
+  useEffect(() => () => controller.current?.abort(), [])
 
   async function search(event: FormEvent) {
     event.preventDefault()
     if (busy) return
+    const request = new AbortController(); controller.current = request
     const params = new URLSearchParams()
     if (keyword.trim()) params.set('keyword', keyword.trim())
     if (rootPath.trim()) params.set('rootPath', rootPath.trim())
@@ -92,13 +95,13 @@ export function FileSearchPanel() {
     setError('')
     try {
       const query = params.toString()
-      const response = await apiFetch(`/api/files/search${query ? `?${query}` : ''}`)
-      setResult(await responseJSON<FileSearchResult>(response))
+      const response = await apiFetch(`/api/files/search${query ? `?${query}` : ''}`, { signal: request.signal })
+      const next = await responseJSON<FileSearchResult>(response)
+      if (!request.signal.aborted) setResult(next)
     } catch {
-      setResult(null)
-      setError(errorMessage())
+      if (!request.signal.aborted) { setResult(null); setError(errorMessage()) }
     } finally {
-      setBusy(false)
+      if (!request.signal.aborted) { controller.current = null; setBusy(false) }
     }
   }
 
@@ -110,7 +113,7 @@ export function FileSearchPanel() {
       <label>文件关键词<input aria-label="文件关键词" value={keyword} maxLength={2000} onChange={(event) => setKeyword(event.target.value)} placeholder="例如 report 或照片" /></label>
       <label>授权目录<input aria-label="授权目录" value={rootPath} maxLength={4096} onChange={(event) => setRootPath(event.target.value)} placeholder="可选，UGOS 已授权目录" /></label>
       <label>扩展名<input aria-label="文件扩展名" value={extension} maxLength={32} onChange={(event) => setExtension(event.target.value)} placeholder="可选，例如 pdf" /></label>
-      <button className="secondary-button" disabled={busy}>{busy ? '搜索中…' : '搜索文件'}</button>
+      <button className="secondary-button" disabled={busy}>{busy ? '搜索中…' : '搜索文件'}</button>{busy && <button type="button" className="secondary-button" onClick={() => { controller.current?.abort(); controller.current = null; setBusy(false); setError('文件搜索已取消。') }}>取消搜索</button>}
     </form>
     {error && <p className="readonly-error" role="alert">{error}</p>}
     {result && <div className="readonly-result">
