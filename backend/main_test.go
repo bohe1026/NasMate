@@ -143,6 +143,30 @@ func TestCancelRunningTaskStopsReadOnlyToolAndKeepsCancelledState(t *testing.T) 
 	}
 }
 
+func TestCreateTaskRespondsBeforeSlowReadOnlyTool(t *testing.T) {
+	server := testServer()
+	provider := cancelAwareStorage{started: make(chan struct{}), release: make(chan struct{}), seenContext: make(chan error, 1)}
+	server.storage = provider
+	defer close(provider.release)
+	created := make(chan *httptest.ResponseRecorder, 1)
+	go func() { created <- request(t, server, http.MethodPost, "/api/tasks", `{"prompt":"检查 NAS 空间"}`) }()
+	select {
+	case result := <-created:
+		if result.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", result.Code, result.Body.String())
+		}
+		var task Task
+		if err := json.Unmarshal(result.Body.Bytes(), &task); err != nil {
+			t.Fatal(err)
+		}
+		if task.Status != statusRunning {
+			t.Fatalf("expected running task while tool is pending, got %+v", task)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("task creation blocked on the read-only tool")
+	}
+}
+
 func TestExpensiveEndpointRateLimit(t *testing.T) {
 	server := testServer()
 	var last *httptest.ResponseRecorder
