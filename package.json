@@ -5,6 +5,7 @@
   "appId": "com.ugreen.aiworkbench",
   "author": "NasMate",
   "description": "A local-first AI workbench for safe NAS operations.",
+  "overrides": { "tar": "7.5.22" },
   "type": "module",
   "scripts": {
     "dev": "vite",
