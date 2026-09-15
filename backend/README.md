@@ -39,7 +39,7 @@ Persistent task, download, and session state is stored below `UGAPP_DATA_DIR` (`
 - `GET /api/models/status`
 - `GET /api/index/status`
 - `POST /api/index/rebuild`
-- `GET /api/index/search`
+- `GET /api/index/search?keyword=<name>&limit=1..100&offset=<n>`（仅返回授权范围元数据，支持分页）
 - `GET /api/artifacts`
 - `GET /api/artifacts/{name}`
 - `POST /api/reports/health/generate`
