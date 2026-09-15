@@ -1212,8 +1212,14 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 			filtered[left], filtered[right] = filtered[right], filtered[left]
 		}
 		nextBefore := int64(0)
-		if len(filtered) > 0 && len(filtered) == limit && filtered[0].ID > 1 {
-			nextBefore = filtered[0].ID
+		if len(filtered) == limit {
+			earliest := filtered[0].ID
+			for _, event := range events {
+				if event.ID < earliest {
+					nextBefore = earliest
+					break
+				}
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": filtered, "truncated": nextBefore > 0, "nextBefore": nextBefore})
 		return

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -195,11 +196,11 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasPrefix(entry.Name(), "health-report-") || !strings.HasSuffix(entry.Name(), ".json") {
+			if !entry.Type().IsRegular() || !validHealthReportName(entry.Name()) {
 				continue
 			}
 			info, err := entry.Info()
-			if err != nil {
+			if err != nil || info.Size() > maxHealthReportBytes {
 				continue
 			}
 			items = append(items, Artifact{Name: entry.Name(), Path: filepath.Join(s.config.DataDir, entry.Name()), SizeBytes: info.Size(), CreatedAt: info.ModTime().UTC()})
@@ -208,27 +209,50 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "readOnly": true})
 }
 
+const maxHealthReportBytes = 1 << 20
+
+func validHealthReportName(name string) bool {
+	if !strings.HasPrefix(name, "health-report-") || !strings.HasSuffix(name, ".json") {
+		return false
+	}
+	_, err := time.Parse("20060102-150405", strings.TrimSuffix(strings.TrimPrefix(name, "health-report-"), ".json"))
+	return err == nil
+}
+
 func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request, name string) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
 		return
 	}
-	if s.config.DataDir == "" || name == "" || filepath.Base(name) != name || !strings.HasPrefix(name, "health-report-") || !strings.HasSuffix(name, ".json") {
+	if s.config.DataDir == "" || !validHealthReportName(name) {
 		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "结果文件不存在")
 		return
 	}
-	path := filepath.Join(s.config.DataDir, name)
-	resolved, err := filepath.EvalSymlinks(path)
-	dataRoot, rootErr := filepath.EvalSymlinks(s.config.DataDir)
-	if err != nil || rootErr != nil || filepath.Dir(resolved) != dataRoot {
-		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "结果文件不存在")
-		return
-	}
-	data, err := os.ReadFile(resolved)
+	root, err := os.OpenRoot(s.config.DataDir)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "结果文件不存在")
 		return
 	}
+	defer root.Close()
+	// Do not follow even in-root symlinks: they could expose private state or keys.
+	// Non-blocking open prevents a substituted FIFO from hanging the request.
+	file, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "结果文件不存在")
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxHealthReportBytes {
+		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "结果文件不可用")
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxHealthReportBytes+1))
+	if err != nil || len(data) > maxHealthReportBytes || !json.Valid(data) {
+		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "结果文件不可用")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)

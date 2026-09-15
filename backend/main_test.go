@@ -201,6 +201,25 @@ func TestTaskEventsRejectCursorBeyondSession(t *testing.T) {
 	}
 }
 
+func TestTaskEventsLastFullPageHasNoOlderCursor(t *testing.T) {
+	server := testServer()
+	server.store.appendEvent("another-task", "task.progress", map[string]string{"private": "other"})
+	server.store.tasks["single"] = &Task{ID: "single", Prompt: "查看轨迹", Status: statusCompleted, User: User{ID: "dev-user"}}
+	server.store.appendEvent("single", "task.progress", map[string]string{"step": "only"})
+	res := request(t, server, http.MethodGet, "/api/tasks/single/events?limit=1", "")
+	var page struct {
+		Items      []Event `json:"items"`
+		Truncated  bool    `json:"truncated"`
+		NextBefore int64   `json:"nextBefore"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if res.Code != http.StatusOK || len(page.Items) != 1 || page.Truncated || page.NextBefore != 0 {
+		t.Fatalf("global event ID incorrectly created an older cursor: %d: %+v", res.Code, page)
+	}
+}
+
 func TestTaskListIsPaginatedAndScoped(t *testing.T) {
 	server := testServer()
 	now := time.Now().UTC()

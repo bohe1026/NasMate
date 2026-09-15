@@ -6,9 +6,64 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestArtifactReadRejectsUnsafeFiles(t *testing.T) {
+	for _, kind := range []string{"symlink-inside", "symlink-outside", "directory", "fifo", "oversized", "invalid-json"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			name := "health-report-20260915-120000.json"
+			path := filepath.Join(root, name)
+			var err error
+			switch kind {
+			case "symlink-inside", "symlink-outside":
+				targetRoot := root
+				if kind == "symlink-outside" {
+					targetRoot = t.TempDir()
+				}
+				target := filepath.Join(targetRoot, "state.json")
+				if err = os.WriteFile(target, []byte(`{"private":"never expose"}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+				err = os.Symlink(target, path)
+			case "directory":
+				err = os.Mkdir(path, 0700)
+			case "fifo":
+				err = syscall.Mkfifo(path, 0600)
+			case "oversized":
+				err = os.WriteFile(path, []byte(strings.Repeat(" ", (1<<20)+1)), 0600)
+			case "invalid-json":
+				err = os.WriteFile(path, []byte("not a report"), 0600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := NewServer(Config{DevMode: true, DataDir: root})
+			res := request(t, server, http.MethodGet, "/api/artifacts/"+name, "")
+			if res.Code == http.StatusOK || strings.Contains(res.Body.String(), "never expose") || strings.Contains(res.Body.String(), root) {
+				t.Fatalf("unsafe artifact exposed: status=%d bytes=%d", res.Code, res.Body.Len())
+			}
+		})
+	}
+}
+
+func TestArtifactReadReturnsJSONWithSafeHeaders(t *testing.T) {
+	root := t.TempDir()
+	name := "health-report-20260915-120000.json"
+	data := `{"readOnly":true,"warnings":["<script>alert(1)</script>"]}`
+	if err := os.WriteFile(filepath.Join(root, name), []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(Config{DevMode: true, DataDir: root})
+	res := request(t, server, http.MethodGet, "/api/artifacts/"+name, "")
+	if res.Code != http.StatusOK || res.Body.String() != data || res.Header().Get("X-Content-Type-Options") != "nosniff" || res.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected artifact response: %d %v %s", res.Code, res.Header(), res.Body.String())
+	}
+}
 
 type fixedReportStorage struct{ usage StorageUsage }
 
