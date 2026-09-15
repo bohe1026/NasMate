@@ -124,7 +124,7 @@ func TestArtifactListDoesNotExposePathsOrUnsafeEntries(t *testing.T) {
 	if res.Code != http.StatusOK || strings.Contains(res.Body.String(), root) || strings.Contains(res.Body.String(), "health-report-invalid") || strings.Contains(res.Body.String(), "120001") {
 		t.Fatalf("unsafe artifact listing: %d %s", res.Code, res.Body.String())
 	}
-	if !strings.Contains(res.Body.String(), name) {
+	if !strings.Contains(res.Body.String(), name) || !strings.Contains(res.Body.String(), `"total":1`) {
 		t.Fatalf("valid artifact missing: %s", res.Body.String())
 	}
 }

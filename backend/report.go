@@ -202,13 +202,26 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 			if err != nil || info.Size() > maxHealthReportBytes {
 				continue
 			}
-			if info.Size() > maxHealthReportBytes {
-				continue
-			}
 			items = append(items, Artifact{Name: entry.Name(), SizeBytes: info.Size(), CreatedAt: info.ModTime().UTC()})
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "readOnly": true})
+	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
+	limit, offset, err := parsePageParams(r.URL.Query(), 30, 30)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
+		return
+	}
+	total := len(items)
+	if offset >= total {
+		items = []Artifact{}
+	} else {
+		end := offset + limit
+		if end > total {
+			end = total
+		}
+		items = items[offset:end]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset, "truncated": offset+len(items) < total, "readOnly": true})
 }
 
 const maxHealthReportBytes = 1 << 20
