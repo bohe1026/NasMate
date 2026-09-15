@@ -522,6 +522,16 @@ func TestDownloadListIsPaginatedAndUserScoped(t *testing.T) {
 	}
 }
 
+func TestDownloadListRejectsInvalidPagination(t *testing.T) {
+	server := testServer()
+	for _, query := range []string{"?limit=0", "?limit=31", "?offset=-1", "?offset=bad"} {
+		res := request(t, server, http.MethodGet, "/api/downloads"+query, "")
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "VALIDATION_FAILED") {
+			t.Fatalf("invalid pagination accepted %s: %d %s", query, res.Code, res.Body.String())
+		}
+	}
+}
+
 func TestIndexRebuildPersistsMetadataOnly(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("private"), 0600); err != nil {

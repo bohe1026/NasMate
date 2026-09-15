@@ -49,6 +49,7 @@ Persistent task, download, and session state is stored below `UGAPP_DATA_DIR` (`
 - `POST /api/network/sources/probe`
 - `POST /api/downloads/prepare`
 - `GET /api/downloads`
+- `GET /api/downloads?limit=1..30&offset=<n>`（按创建时间倒序，用户隔离分页）
 - `GET /api/downloads/{id}`
 - `POST /api/downloads/{id}?action=approve|deny`
 
