@@ -99,7 +99,7 @@ func TestHealthReportComparesPreviousSnapshotAndCountsFailedDownloads(t *testing
 	server.store.tasks["failed"] = &Task{ID: "failed", Status: statusFailed, User: User{ID: "dev-user"}}
 	server.store.tasks["other-user"] = &Task{ID: "other-user", Status: statusFailed, User: User{ID: "other-user"}}
 	report := server.buildHealthReport(httptest.NewRequest(http.MethodGet, "/api/reports/health", nil))
-	if report.FailedTasks != 1 || report.FailedDownloads != 1 || len(report.FastestGrowing) != 3 || report.FastestGrowing[0].Path != "/photos" || report.FastestGrowing[0].DeltaBytes != 200 {
+	if report.FailedTasks != 1 || report.FailedDownloads != 1 || len(report.FastestGrowing) != 2 || report.FastestGrowing[0].Path != "/photos" || report.FastestGrowing[0].DeltaBytes != 200 {
 		t.Fatalf("report missed download failures or ranked growth incorrectly: %+v", report)
 	}
 	if report.ComparedAt.IsZero() || !report.ComparedAt.Equal(previous.GeneratedAt) {
@@ -135,5 +135,12 @@ func TestFirstHealthReportHasNoInventedGrowth(t *testing.T) {
 	report := server.buildHealthReport(httptest.NewRequest(http.MethodGet, "/api/reports/health", nil))
 	if !report.ComparedAt.IsZero() || len(report.FastestGrowing) != 0 {
 		t.Fatalf("first report invented growth without a prior snapshot: %+v", report)
+	}
+}
+
+func TestStorageGrowthIgnoresNewPathsUntilNextSnapshot(t *testing.T) {
+	got := storageGrowth([]UsageItem{{Path: "/new", SizeBytes: 500}, {Path: "/old", SizeBytes: 300}}, []UsageItem{{Path: "/old", SizeBytes: 100}})
+	if len(got) != 1 || got[0].Path != "/old" || got[0].DeltaBytes != 200 {
+		t.Fatalf("new path was counted as growth: %+v", got)
 	}
 }

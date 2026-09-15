@@ -70,7 +70,11 @@ func storageGrowth(current, previous []UsageItem) []UsageGrowth {
 	}
 	items := make([]UsageGrowth, 0, len(current))
 	for _, item := range current {
-		if delta := item.SizeBytes - baseline[item.Path]; delta > 0 {
+		previousSize, exists := baseline[item.Path]
+		if !exists {
+			continue
+		}
+		if delta := item.SizeBytes - previousSize; delta > 0 {
 			items = append(items, UsageGrowth{Path: item.Path, DeltaBytes: delta})
 		}
 	}
