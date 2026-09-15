@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -41,6 +42,40 @@ func requestAsUser(t *testing.T, server http.Handler, method, path, body string)
 	return res
 }
 
+func waitForTaskStatus(t *testing.T, server *Server, id, want string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		server.store.mu.RLock()
+		task := server.store.tasks[id]
+		status := ""
+		if task != nil {
+			status = task.Status
+		}
+		server.store.mu.RUnlock()
+		if status == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("task %s did not reach %s", id, want)
+}
+
+func waitForTaskWorker(t *testing.T, server *Server, id string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		server.taskMu.Lock()
+		_, running := server.tasksCtx[id]
+		server.taskMu.Unlock()
+		if !running {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("task %s worker did not stop", id)
+}
+
 func TestCreateTaskAndEvents(t *testing.T) {
 	server := testServer()
 	res := request(t, server, http.MethodPost, "/api/tasks", `{"prompt":"检查 NAS 空间"}`)
@@ -51,9 +86,11 @@ func TestCreateTaskAndEvents(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&task); err != nil {
 		t.Fatal(err)
 	}
-	if task.ID == "" || task.Status != statusCompleted {
+	if task.ID == "" || task.Status != statusRunning {
 		t.Fatalf("unexpected task: %+v", task)
 	}
+	waitForTaskStatus(t, server, task.ID, statusCompleted)
+	waitForTaskWorker(t, server, task.ID)
 	if len(server.store.events[task.ID]) != 7 {
 		t.Fatalf("expected seven durable events, got %d", len(server.store.events[task.ID]))
 	}
@@ -66,6 +103,7 @@ func TestCancelFinishedTaskIsRejected(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&task); err != nil {
 		t.Fatal(err)
 	}
+	waitForTaskStatus(t, server, task.ID, statusCompleted)
 	res = request(t, server, http.MethodPost, "/api/tasks/"+task.ID+"/cancel", "")
 	if res.Code != http.StatusConflict {
 		t.Fatalf("expected finished task cancellation to be rejected, got %d: %s", res.Code, res.Body.String())
@@ -124,16 +162,14 @@ func TestCancelRunningTaskStopsReadOnlyToolAndKeepsCancelledState(t *testing.T) 
 	}
 	select {
 	case result := <-created:
-		var task Task
-		if err := json.Unmarshal(result.Body.Bytes(), &task); err != nil {
-			t.Fatal(err)
-		}
-		if task.Status != statusCancelled {
-			t.Fatalf("finished tool overwrote cancelled state: %+v", task)
+		if result.Code != http.StatusCreated {
+			t.Fatalf("task creation failed: %s", result.Body.String())
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("task creation did not finish after cancellation")
 	}
+	waitForTaskStatus(t, server, id, statusCancelled)
+	waitForTaskWorker(t, server, id)
 	server.store.mu.RLock()
 	defer server.store.mu.RUnlock()
 	for _, event := range server.store.events[id] {
@@ -147,7 +183,9 @@ func TestCreateTaskRespondsBeforeSlowReadOnlyTool(t *testing.T) {
 	server := testServer()
 	provider := cancelAwareStorage{started: make(chan struct{}), release: make(chan struct{}), seenContext: make(chan error, 1)}
 	server.storage = provider
-	defer close(provider.release)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(provider.release) }) }
+	defer release()
 	created := make(chan *httptest.ResponseRecorder, 1)
 	go func() { created <- request(t, server, http.MethodPost, "/api/tasks", `{"prompt":"检查 NAS 空间"}`) }()
 	select {
@@ -162,6 +200,12 @@ func TestCreateTaskRespondsBeforeSlowReadOnlyTool(t *testing.T) {
 		if task.Status != statusRunning {
 			t.Fatalf("expected running task while tool is pending, got %+v", task)
 		}
+		cancelled := request(t, server, http.MethodPost, "/api/tasks/"+task.ID+"/cancel", "")
+		if cancelled.Code != http.StatusOK {
+			t.Fatalf("expected cancellation to remain available, got %d", cancelled.Code)
+		}
+		release()
+		waitForTaskWorker(t, server, task.ID)
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("task creation blocked on the read-only tool")
 	}
@@ -697,6 +741,8 @@ func TestStorePersistsTasksAndEvents(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
 		t.Fatal(err)
 	}
+	waitForTaskStatus(t, server, created.ID, statusCompleted)
+	waitForTaskWorker(t, server, created.ID)
 
 	restarted := NewServer(config)
 	res = request(t, restarted, http.MethodGet, "/api/tasks", "")

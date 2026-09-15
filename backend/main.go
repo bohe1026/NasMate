@@ -829,10 +829,9 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		s.store.appendEvent(task.ID, "user.message", map[string]string{"prompt": task.Prompt})
 		s.store.appendEvent(task.ID, "agent.plan", map[string]any{"mode": "policy-constrained", "scope": s.config.SharedRoots, "plan": plan})
 		s.store.appendEvent(task.ID, "task.progress", map[string]string{"message": "已完成权限检查"})
-		// Execute read-only plans before responding so persisted state is durable
-		// when a caller immediately restarts the application.
-		s.executeTask(ctx, cancel, task.ID, task.Prompt, plan)
-		writeJSON(w, http.StatusCreated, task)
+		taskCopy := *task
+		go s.executeTask(ctx, cancel, task.ID, task.Prompt, plan)
+		writeJSON(w, http.StatusCreated, taskCopy)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
 	}

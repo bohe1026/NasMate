@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { apiFetch } from './api'
@@ -73,6 +73,25 @@ it('refreshes the event trail after cancelling a task', async () => {
   await screen.findByText('已取消')
   await waitFor(() => expect(eventReads).toBe(2))
   expect(screen.getByText('task.cancelled')).toBeTruthy()
+})
+
+it('polls a running task until its final status and event trail appear', async () => {
+  taskReply = [runningTask]
+  const fallback = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (input, init) => String(input) === '/api/tasks/task-1'
+    ? Response.json({ ...runningTask, status: '已完成', summary: '只读检查完成' })
+    : fallback(input, init))
+  render(<App />)
+  const taskButton = await screen.findByRole('button', { name: '检查备份' })
+  vi.useFakeTimers()
+  try {
+    fireEvent.click(taskButton)
+    await act(async () => { await vi.advanceTimersByTimeAsync(2200) })
+    expect(screen.getByText('已完成')).toBeTruthy()
+    expect(eventReads).toBeGreaterThan(1)
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 it('shows the complete dry run preview without executing file changes', async () => {
