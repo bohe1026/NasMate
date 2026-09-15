@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -47,8 +48,8 @@ func (s *Server) handleOrganizeDryRun(w http.ResponseWriter, r *http.Request) {
 	if req.Mode == "" {
 		req.Mode = "date"
 	}
-	if req.Mode != "date" && req.Mode != "extension" {
-		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "mode 仅支持 date 或 extension")
+	if req.Mode != "date" && req.Mode != "extension" && req.Mode != "project" && req.Mode != "duplicate" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "mode 仅支持 date、extension、project 或 duplicate")
 		return
 	}
 	items := make([]OrganizeItem, 0)
@@ -64,16 +65,30 @@ func (s *Server) handleOrganizeDryRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seen := map[string]bool{}
+	duplicateSeen := map[string]string{}
 	truncated := len(files) > 1000 || scanErr != nil
 	if len(files) > 1000 {
 		files = files[:1000]
 	}
 	for _, file := range files {
 		var folder string
-		if req.Mode == "extension" {
+		if req.Mode == "duplicate" {
+			key := file.Name + ":" + strconv.FormatInt(file.SizeBytes, 10)
+			if previous, ok := duplicateSeen[key]; ok {
+				skipped = append(skipped, file.Path+"（疑似重复，参考："+previous+"）")
+				continue
+			}
+			duplicateSeen[key] = file.Path
+			folder = "重复文件待确认"
+		} else if req.Mode == "extension" {
 			folder = strings.TrimPrefix(file.Extension, ".")
 			if folder == "" {
 				folder = "无扩展名"
+			}
+		} else if req.Mode == "project" {
+			folder = filepath.Base(filepath.Dir(file.Path))
+			if folder == "." || folder == "" {
+				folder = "未分类项目"
 			}
 		} else {
 			folder = file.ModifiedAt.Format("2006-01")

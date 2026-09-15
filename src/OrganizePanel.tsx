@@ -45,7 +45,7 @@ export function OrganizePanel() {
     <p>只读取元数据并生成建议，不会移动、重命名、压缩或删除文件；日期按文件修改时间归类。</p>
     <form className="source-probe-row" onSubmit={preview}>
       <input aria-label="整理授权目录" placeholder="输入 UGOS 已授权的目录" maxLength={4096} required readOnly={busy} value={root} onChange={(event) => { setRoot(event.target.value); setPlan(null) }} />
-      <select aria-label="整理方式" value={mode} disabled={busy} onChange={(event) => { setMode(event.target.value); setPlan(null) }}><option value="date">按修改月份</option><option value="extension">按扩展名</option></select>
+    <select aria-label="整理方式" value={mode} disabled={busy} onChange={(event) => { setMode(event.target.value); setPlan(null) }}><option value="date">按修改月份</option><option value="extension">按扩展名</option><option value="project">按项目目录</option><option value="duplicate">疑似重复文件</option></select>
       <button className="secondary-button" disabled={!root.trim() || busy}>{busy ? '生成中…' : '生成预览'}</button>
       {busy && <button type="button" className="secondary-button" onClick={() => { controller.current?.abort(); controller.current = null; setBusy(false); setError('预览已取消，文件未变更。') }}>取消预览</button>}
     </form>
