@@ -1039,6 +1039,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.tasksCtx[task.ID] = cancel
+		s.workers.Add(1)
 		s.taskMu.Unlock()
 		s.store.mu.Lock()
 		s.store.tasks[task.ID] = task
@@ -1047,7 +1048,6 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		s.store.appendEvent(task.ID, "session.created", map[string]string{"userId": user.ID})
 		s.store.appendEvent(task.ID, "user.message", map[string]string{"prompt": task.Prompt})
 		taskCopy := *task
-		s.workers.Add(1)
 		go s.runTask(ctx, cancel, task.ID, task.Prompt)
 		writeJSON(w, http.StatusCreated, taskCopy)
 	default:
@@ -1316,6 +1316,7 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 			return
 		}
 		s.tasksCtx[resumed.ID] = cancel
+		s.workers.Add(1)
 		s.taskMu.Unlock()
 		s.store.mu.Lock()
 		s.store.tasks[resumed.ID] = resumed
@@ -1325,7 +1326,6 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 		s.store.appendEvent(resumed.ID, "session.forked", map[string]string{"parentTaskId": taskCopy.ID, "parentStatus": taskCopy.Status, "parentSummary": taskCopy.Summary})
 		s.store.appendEvent(resumed.ID, "user.message", map[string]string{"prompt": resumed.Prompt})
 		copy := *resumed
-		s.workers.Add(1)
 		go s.runTask(ctx, cancel, resumed.ID, resumed.Prompt)
 		writeJSON(w, http.StatusCreated, copy)
 		return
