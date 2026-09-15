@@ -36,7 +36,11 @@ export function HealthReportPanel() {
     setState('loading')
     try { setReport(await readReport()); setState('ready') } catch { setState('error') }
   }
-  useEffect(() => { void refresh() }, [])
+  useEffect(() => {
+    let live = true
+    void readReport().then((data) => { if (live) { setReport(data); setState('ready') } }).catch(() => { if (live) setState('error') })
+    return () => { live = false }
+  }, [])
 
   const unhealthy = report?.docker?.filter((item) => item.container?.status !== 'running').length ?? 0
   const backupOK = report?.backup?.lastRunStatus === 'success' && report.backup.recoveryReady
