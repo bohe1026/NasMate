@@ -94,3 +94,26 @@ it('shows the complete dry run preview without executing file changes', async ()
   expect(screen.queryByRole('button', { name: /执行整理/ })).toBeNull()
   expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST').map(([url]) => url)).toEqual(['/api/organize/dry-run'])
 })
+
+it('creates a download plan and waits for a separate user approval', async () => {
+  const planned = { id: 'download-1', targetDirectory: '/photos', sources: [{ title: '素材', url: 'https://example.com/image.jpg', license: 'CC0', sizeBytes: 1024 }], estimatedBytes: 1024, status: '待确认' }
+  const fallback = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (input, init) => {
+    if (String(input) === '/api/downloads/prepare') return Response.json(planned, { status: 201 })
+    if (String(input) === '/api/downloads/download-1?action=deny') return Response.json({ ...planned, status: '已取消' })
+    return fallback(input, init)
+  })
+  const user = userEvent.setup()
+  render(<App />)
+  await user.click(screen.getByRole('button', { name: '下载任务' }))
+  await user.type(screen.getByRole('textbox', { name: '保存目录' }), '/photos')
+  await user.type(screen.getByRole('textbox', { name: '文件地址 1' }), 'https://example.com/image.jpg')
+  await user.type(screen.getByRole('textbox', { name: '许可证或使用说明 1' }), 'CC0')
+  await user.type(screen.getByRole('spinbutton', { name: '大小上限（字节）1' }), '1024')
+  await user.click(screen.getByRole('button', { name: '生成下载计划' }))
+  await screen.findByRole('button', { name: '确认下载' })
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('action=approve'))).toBe(false)
+  await user.click(screen.getByRole('button', { name: '拒绝' }))
+  await screen.findByText('已取消')
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('action=approve'))).toBe(false)
+})

@@ -152,3 +152,23 @@ func TestDownloadPlanRequiresLicenseBudgetAndAllowedType(t *testing.T) {
 		}
 	}
 }
+
+func TestDownloadApprovalLimitsConcurrentWorkers(t *testing.T) {
+	s, root := seedDownload(t, 3)
+	for _, id := range []string{"busy-1", "busy-2", "busy-3"} {
+		s.downloadsCtx[id] = func() {}
+	}
+	body, _ := json.Marshal(downloadPrepareRequest{TargetDirectory: root, Sources: []DownloadSource{{URL: "https://example.com/file.txt", License: "CC0", SizeBytes: 3}}})
+	res := request(t, s, http.MethodPost, "/api/downloads/prepare", string(body))
+	var plan DownloadPlan
+	if err := json.Unmarshal(res.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	res = request(t, s, http.MethodPost, "/api/downloads/"+plan.ID+"?action=approve", "")
+	if res.Code != http.StatusTooManyRequests {
+		t.Fatalf("concurrency not limited: %d", res.Code)
+	}
+	if s.store.downloads[plan.ID].Status != statusPending {
+		t.Fatal("failed approval changed pending plan")
+	}
+}
