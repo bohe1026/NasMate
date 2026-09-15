@@ -127,13 +127,14 @@ type Event struct {
 }
 
 type Task struct {
-	ID        string    `json:"id"`
-	Prompt    string    `json:"prompt"`
-	Status    string    `json:"status"`
-	Summary   string    `json:"summary"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	User      User      `json:"user"`
+	ID           string    `json:"id"`
+	Prompt       string    `json:"prompt"`
+	Status       string    `json:"status"`
+	Summary      string    `json:"summary"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+	User         User      `json:"user"`
+	ParentTaskID string    `json:"parentTaskId,omitempty"`
 }
 
 type FileMetadata struct {
@@ -1059,6 +1060,43 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 		s.store.persist()
 		s.store.appendEvent(id, "task.cancelled", map[string]string{"userId": user.ID})
 		writeJSON(w, http.StatusOK, &taskCopy)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "resume" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+			return
+		}
+		if task.Status == statusRunning || task.Status == statusPlanning {
+			writeError(w, http.StatusConflict, "VALIDATION_FAILED", "任务仍在运行，不能继续发起")
+			return
+		}
+		if containsCredential(task.Prompt) {
+			writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "原任务包含凭据，不能继续发起")
+			return
+		}
+		now := time.Now().UTC()
+		resumed := &Task{ID: newID("task"), Prompt: task.Prompt, Status: statusPlanning, Summary: "正在继续规划受限工具步骤", CreatedAt: now, UpdatedAt: now, User: user, ParentTaskID: task.ID}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		s.taskMu.Lock()
+		if len(s.tasksCtx) >= 3 {
+			s.taskMu.Unlock()
+			cancel()
+			writeError(w, http.StatusTooManyRequests, "RATE_LIMITED", "最多同时运行 3 个任务，请稍后重试")
+			return
+		}
+		s.tasksCtx[resumed.ID] = cancel
+		s.taskMu.Unlock()
+		s.store.mu.Lock()
+		s.store.tasks[resumed.ID] = resumed
+		s.store.mu.Unlock()
+		s.store.persist()
+		s.store.appendEvent(resumed.ID, "session.created", map[string]string{"userId": user.ID, "parentTaskId": task.ID})
+		s.store.appendEvent(resumed.ID, "session.forked", map[string]string{"parentTaskId": task.ID})
+		s.store.appendEvent(resumed.ID, "user.message", map[string]string{"prompt": resumed.Prompt})
+		copy := *resumed
+		go s.runTask(ctx, cancel, resumed.ID, resumed.Prompt)
+		writeJSON(w, http.StatusCreated, copy)
 		return
 	}
 	if r.Method != http.MethodGet || len(parts) != 1 {

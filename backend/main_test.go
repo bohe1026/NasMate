@@ -110,6 +110,52 @@ func TestCancelFinishedTaskIsRejected(t *testing.T) {
 	}
 }
 
+func TestResumeFinishedTaskCreatesLinkedSession(t *testing.T) {
+	server := testServer()
+	res := request(t, server, http.MethodPost, "/api/tasks", `{"prompt":"检查 NAS 空间"}`)
+	var original Task
+	if err := json.NewDecoder(res.Body).Decode(&original); err != nil {
+		t.Fatal(err)
+	}
+	waitForTaskStatus(t, server, original.ID, statusCompleted)
+	res = request(t, server, http.MethodPost, "/api/tasks/"+original.ID+"/resume", "")
+	if res.Code != http.StatusCreated {
+		t.Fatalf("resume failed: %d: %s", res.Code, res.Body.String())
+	}
+	var resumed Task
+	if err := json.NewDecoder(res.Body).Decode(&resumed); err != nil {
+		t.Fatal(err)
+	}
+	if resumed.ParentTaskID != original.ID || resumed.Prompt != original.Prompt || resumed.ID == original.ID {
+		t.Fatalf("invalid linked task: %+v", resumed)
+	}
+	waitForTaskWorker(t, server, resumed.ID)
+	server.store.mu.RLock()
+	defer server.store.mu.RUnlock()
+	if server.store.tasks[original.ID].Status != statusCompleted {
+		t.Fatal("resume changed original task")
+	}
+	foundFork := false
+	for _, event := range server.store.events[resumed.ID] {
+		if event.Type == "session.forked" {
+			foundFork = true
+		}
+	}
+	if !foundFork {
+		t.Fatalf("missing fork event: %+v", server.store.events[resumed.ID])
+	}
+}
+
+func TestResumeTaskCannotCrossUsers(t *testing.T) {
+	server := testServer()
+	now := time.Now().UTC()
+	server.store.tasks["private"] = &Task{ID: "private", Prompt: "检查 NAS", Status: statusFailed, CreatedAt: now, UpdatedAt: now, User: User{ID: "other-user"}}
+	res := request(t, server, http.MethodPost, "/api/tasks/private/resume", "")
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("cross-user resume exposed task: %d: %s", res.Code, res.Body.String())
+	}
+}
+
 type cancelAwareStorage struct {
 	started     chan struct{}
 	release     chan struct{}
