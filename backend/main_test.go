@@ -1076,6 +1076,37 @@ func TestReadOnlyStorageEndpointsReportUserCancellation(t *testing.T) {
 	}
 }
 
+type cancelledDocker struct{}
+
+func (cancelledDocker) List(ctx context.Context) ([]ContainerDiagnostic, error) {
+	return nil, ctx.Err()
+}
+func (cancelledDocker) Inspect(ctx context.Context, _ string, _ int) (ContainerDiagnostic, error) {
+	return ContainerDiagnostic{}, ctx.Err()
+}
+
+type cancelledBackup struct{}
+
+func (cancelledBackup) Status(ctx context.Context) (BackupStatus, error) {
+	return BackupStatus{}, ctx.Err()
+}
+
+func TestDockerAndBackupReportUserCancellation(t *testing.T) {
+	server := testServer()
+	server.docker = cancelledDocker{}
+	server.backup = cancelledBackup{}
+	for _, path := range []string{"/api/docker/containers", "/api/backups/status", "/api/backups/recovery-plan"} {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
+		res := httptest.NewRecorder()
+		server.ServeHTTP(res, req)
+		if res.Code != http.StatusRequestTimeout || !strings.Contains(res.Body.String(), "USER_CANCELLED") {
+			t.Fatalf("%s cancellation mismatch: %d %s", path, res.Code, res.Body.String())
+		}
+	}
+}
+
 type cancelledReadOnlyStorage struct{}
 
 func (cancelledReadOnlyStorage) Usage(ctx context.Context) (StorageUsage, error) {

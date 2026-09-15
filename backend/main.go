@@ -1398,6 +1398,10 @@ func (s *Server) handleDocker(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || r.Context().Err() != nil {
+				writeError(w, http.StatusRequestTimeout, "USER_CANCELLED", "容器诊断已取消")
+				return
+			}
 			writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取容器状态")
 			return
 		}
@@ -1407,6 +1411,10 @@ func (s *Server) handleDocker(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := s.docker.List(r.Context())
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || r.Context().Err() != nil {
+			writeError(w, http.StatusRequestTimeout, "USER_CANCELLED", "容器诊断已取消")
+			return
+		}
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取容器状态")
 		return
 	}
@@ -1447,6 +1455,10 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.backup.Status(r.Context())
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || r.Context().Err() != nil {
+			writeError(w, http.StatusRequestTimeout, "USER_CANCELLED", "备份检查已取消")
+			return
+		}
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取备份状态")
 		return
 	}
@@ -1460,6 +1472,10 @@ func (s *Server) handleRecoveryPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	status, err := s.backup.Status(r.Context())
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || r.Context().Err() != nil {
+			writeError(w, http.StatusRequestTimeout, "USER_CANCELLED", "恢复计划读取已取消")
+			return
+		}
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取备份状态")
 		return
 	}
