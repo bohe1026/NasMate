@@ -848,6 +848,12 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		task := &Task{ID: newID("task"), Prompt: strings.TrimSpace(req.Prompt), Status: statusPlanning, Summary: "正在规划受限工具步骤", CreatedAt: now, UpdatedAt: now, User: user}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		s.taskMu.Lock()
+		if len(s.tasksCtx) >= 3 {
+			s.taskMu.Unlock()
+			cancel()
+			writeError(w, http.StatusTooManyRequests, "RATE_LIMITED", "最多同时运行 3 个任务，请稍后重试")
+			return
+		}
 		s.tasksCtx[task.ID] = cancel
 		s.taskMu.Unlock()
 		s.store.mu.Lock()
@@ -914,7 +920,7 @@ func (s *Server) executeTask(ctx context.Context, id, prompt string, plan AgentP
 	}
 	for _, step := range plan.Steps {
 		if step.Tool == "prepare_download" {
-			s.store.appendEvent(id, "tool.result", map[string]any{"status": "warning", "summary": "对话中缺少经过校验的来源与目标目录，未创建下载计划", "next_actions": []string{"在下载页面填写来源、许可证和授权目录后生成计划"}, "artifacts": []string{}})
+			s.store.appendEvent(id, "task.progress", map[string]any{"status": "warning", "summary": "对话中缺少经过校验的来源与目标目录，未创建下载计划", "next_actions": []string{"在下载页面填写来源、许可证和授权目录后生成计划"}, "artifacts": []string{}})
 			s.finishTask(id, statusFailed, "未创建下载计划：请在下载页面提供来源、许可证和目标目录后重新准备")
 			return
 		}

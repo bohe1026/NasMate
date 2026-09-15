@@ -786,8 +786,8 @@ func TestDownloadRequestWithoutSourcesNeverCreatesFakeApproval(t *testing.T) {
 		t.Fatalf("failure was not recorded: %+v", events)
 	}
 	for _, event := range events {
-		if event.Type == "approval.requested" || event.Type == "approval.granted" {
-			t.Fatalf("approval without a validated download plan: %+v", event)
+		if event.Type == "approval.requested" || event.Type == "approval.granted" || event.Type == "tool.call" || event.Type == "tool.result" {
+			t.Fatalf("unexecuted download plan generated tool or approval events: %+v", event)
 		}
 	}
 }

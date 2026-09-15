@@ -155,6 +155,62 @@ func TestCredentialBearingTaskPromptIsRejectedBeforeLogging(t *testing.T) {
 	}
 }
 
+func TestConcurrentTaskLimitIsReleasedAfterCancellation(t *testing.T) {
+	server := testServer()
+	models := make(chan context.Context, 4)
+	server.harness.model = blockingModel{contexts: models}
+	var ids []string
+	for i := 0; i < 3; i++ {
+		res := request(t, server, http.MethodPost, "/api/tasks", `{"prompt":"检查 NAS 空间"}`)
+		if res.Code != http.StatusCreated {
+			t.Fatalf("task %d was rejected: %d: %s", i, res.Code, res.Body.String())
+		}
+		var task Task
+		if err := json.NewDecoder(res.Body).Decode(&task); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, task.ID)
+	}
+	defer func() {
+		for _, id := range ids {
+			request(t, server, http.MethodPost, "/api/tasks/"+id+"/cancel", "")
+		}
+	}()
+	for i := 0; i < 3; i++ {
+		select {
+		case <-models:
+		case <-time.After(3 * time.Second):
+			t.Fatal("model did not enter planning")
+		}
+	}
+	res := request(t, server, http.MethodPost, "/api/tasks", `{"prompt":"检查 NAS 空间"}`)
+	if res.Code != http.StatusTooManyRequests || !strings.Contains(res.Body.String(), "RATE_LIMITED") {
+		t.Fatalf("unbounded concurrent task was accepted: %d: %s", res.Code, res.Body.String())
+	}
+	if len(server.store.tasks) != 3 {
+		t.Fatalf("rejected task was persisted: %d", len(server.store.tasks))
+	}
+	request(t, server, http.MethodPost, "/api/tasks/"+ids[0]+"/cancel", "")
+	waitForTaskWorker(t, server, ids[0])
+	res = request(t, server, http.MethodPost, "/api/tasks", `{"prompt":"检查 NAS 空间"}`)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("task slot was not released after cancellation: %d: %s", res.Code, res.Body.String())
+	}
+	var next Task
+	if err := json.NewDecoder(res.Body).Decode(&next); err != nil {
+		t.Fatal(err)
+	}
+	ids = append(ids, next.ID)
+}
+
+type blockingModel struct{ contexts chan context.Context }
+
+func (model blockingModel) Plan(ctx context.Context, _ string, _ []ToolSpec) (AgentPlan, error) {
+	model.contexts <- ctx
+	<-ctx.Done()
+	return AgentPlan{}, ctx.Err()
+}
+
 func TestOpenAICompatiblePlanningRequestRecordsNoOriginalUserData(t *testing.T) {
 	received := make(chan map[string]any, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
