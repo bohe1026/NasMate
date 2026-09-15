@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -24,6 +26,7 @@ type OrganizePlan struct {
 	Skipped    []string       `json:"skipped"`
 	SpaceDelta int64          `json:"spaceDelta"`
 	DryRun     bool           `json:"dryRun"`
+	Truncated  bool           `json:"truncated"`
 }
 
 func (s *Server) handleOrganizeDryRun(w http.ResponseWriter, r *http.Request) {
@@ -51,12 +54,20 @@ func (s *Server) handleOrganizeDryRun(w http.ResponseWriter, r *http.Request) {
 	items := make([]OrganizeItem, 0)
 	skipped := make([]string, 0)
 	conflicts := make([]string, 0)
-	files, scanErr := s.storage.Search(context.Background(), FileSearchOptions{RootPath: root, MaxResults: 1000})
+	files, scanErr := s.storage.Search(r.Context(), FileSearchOptions{RootPath: root, MaxResults: 1001})
+	if errors.Is(scanErr, context.Canceled) || r.Context().Err() != nil {
+		writeError(w, http.StatusRequestTimeout, "USER_CANCELLED", "整理预览已取消")
+		return
+	}
 	if scanErr != nil && len(files) == 0 {
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取文件元数据")
 		return
 	}
 	seen := map[string]bool{}
+	truncated := len(files) > 1000 || scanErr != nil
+	if len(files) > 1000 {
+		files = files[:1000]
+	}
 	for _, file := range files {
 		var folder string
 		if req.Mode == "extension" {
@@ -72,6 +83,19 @@ func (s *Server) handleOrganizeDryRun(w http.ResponseWriter, r *http.Request) {
 			skipped = append(skipped, file.Path)
 			continue
 		}
+		if _, err := s.resolveAuthorizedPath(dest); err != nil {
+			skipped = append(skipped, file.Path)
+			continue
+		}
+		_, statErr := os.Lstat(dest)
+		if statErr == nil {
+			conflicts = append(conflicts, dest)
+			continue
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			skipped = append(skipped, file.Path)
+			continue
+		}
 		if seen[dest] {
 			conflicts = append(conflicts, dest)
 			continue
@@ -79,6 +103,6 @@ func (s *Server) handleOrganizeDryRun(w http.ResponseWriter, r *http.Request) {
 		seen[dest] = true
 		items = append(items, OrganizeItem{Source: file.Path, Destination: dest, Reason: "Dry Run 仅生成建议，不执行移动"})
 	}
-	returnPlan := OrganizePlan{Status: "success", Summary: "已生成批量整理预览，未修改任何文件", Items: items, Conflicts: conflicts, Skipped: skipped, DryRun: true}
+	returnPlan := OrganizePlan{Status: "success", Summary: "已生成批量整理预览，未修改任何文件", Items: items, Conflicts: conflicts, Skipped: skipped, DryRun: true, Truncated: truncated}
 	writeJSON(w, http.StatusOK, returnPlan)
 }

@@ -42,6 +42,12 @@ button { cursor: pointer; }
 .task-cancel { align-self: flex-start; height: 30px; padding: 0 10px; color: var(--danger); background: #fff2f3; border: 1px solid #f3d7da; border-radius: 8px; font-size: 10px; }
 .heading-actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:18px; }
 .heading-actions .report-button { margin-top:0; }
+.source-probe-row select { max-width:160px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); }
+.organize-table { max-height:360px; overflow:auto; margin:14px 0; }
+.organize-table table { width:100%; border-collapse:collapse; font-size:11px; text-align:left; }
+.organize-table td,.organize-table th { padding:10px; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
+.organize-table caption { text-align:left; color:var(--muted); padding:8px 0; }
+.organize-result details { font-size:11px; overflow-wrap:anywhere; margin:12px 0; }
 .probe-result { flex-wrap:wrap; overflow-wrap:anywhere; }
 @media (max-width:540px) { .source-probe-row { flex-wrap:wrap; } .source-probe-row input { flex-basis:100%; } }
 .secondary-button { border:1px solid var(--line); background:var(--surface); color:var(--ink); border-radius:9px; padding:0 14px; height:34px; font-size:10px; cursor:pointer; }
