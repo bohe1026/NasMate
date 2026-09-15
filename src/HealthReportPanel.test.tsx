@@ -9,7 +9,7 @@ const fetchMock = vi.mocked(apiFetch)
 
 beforeEach(() => {
   fetchMock.mockReset()
-  fetchMock.mockResolvedValue(Response.json({
+  fetchMock.mockImplementation(async (input) => String(input).startsWith('/api/artifacts') ? Response.json({ items: [{ name: 'health-report-20260915-020000.json', sizeBytes: 512, createdAt: '2026-09-15T02:00:00Z' }] }) : Response.json({
     generatedAt: '2026-09-15T02:00:00Z',
     storage: { suggestions: ['家庭影像增长较快'] },
     docker: [{ container: { name: 'paperless', status: 'unhealthy' }, findings: ['健康检查返回 503'] }],
@@ -43,5 +43,12 @@ describe('health report snapshot', () => {
     await screen.findByText('有一个容器需要关注')
     await user.click(screen.getByRole('button', { name: '刷新健康日报' }))
     expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+
+  it('shows links for historical report artifacts', async () => {
+    render(<HealthReportPanel />)
+    await screen.findByText('health-report-20260915-020000.json')
+    const link = screen.getByRole('link', { name: '查看 / 下载' })
+    expect(link.getAttribute('href')).toBe('/api/artifacts/health-report-20260915-020000.json')
   })
 })
