@@ -474,6 +474,25 @@ func TestIndexStatusDistinguishesUnavailableIndex(t *testing.T) {
 	}
 }
 
+func TestIndexStatusCountsOnlyAuthorizedItems(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	dataDir := filepath.Join(root, "data")
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	items := []FileMetadata{{Name: "inside.txt", Path: filepath.Join(root, "inside.txt")}, {Name: "outside.txt", Path: filepath.Join(outside, "outside.txt")}}
+	data, _ := json.Marshal(map[string]any{"generatedAt": time.Now().UTC(), "items": items})
+	if err := os.WriteFile(filepath.Join(dataDir, "metadata-index.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: dataDir})
+	res := request(t, server, http.MethodGet, "/api/index/status", "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"itemCount":1`) {
+		t.Fatalf("unauthorized index entries counted: %d %s", res.Code, res.Body.String())
+	}
+}
+
 func TestIndexRebuildPersistsMetadataOnly(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("private"), 0600); err != nil {

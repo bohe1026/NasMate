@@ -735,7 +735,12 @@ func (s *Server) handleIndexStatus(w http.ResponseWriter, r *http.Request) {
 				Items       []FileMetadata `json:"items"`
 			}
 			if json.Unmarshal(data, &index) == nil && !index.GeneratedAt.IsZero() {
-				status, generatedAt, itemCount = "available", index.GeneratedAt, len(index.Items)
+				for _, item := range index.Items {
+					if s.authorizePath(item.Path) {
+						itemCount++
+					}
+				}
+				status, generatedAt = "available", index.GeneratedAt
 			} else {
 				status = "unavailable"
 			}
