@@ -8,7 +8,7 @@ export const ugosReady = UGOSCore.init()
 async function initializeUGOSAuth() {
   if (authReady) return authReady
 
-  authReady = (async () => {
+  const authenticate = async () => {
     await ugosReady
     try {
       const info = await cloudWindow.useCapacity('getThirdToken') as { third_token?: unknown } | null
@@ -18,7 +18,11 @@ async function initializeUGOSAuth() {
     } catch {
       // The local Vite preview has no UGOS host. The backend's explicit dev mode handles it.
     }
-  })()
+  }
+
+  authReady = import.meta.env.DEV
+    ? Promise.race([authenticate(), new Promise<void>((resolve) => window.setTimeout(resolve, 1500))]).then(() => undefined)
+    : authenticate()
 
   return authReady
 }
