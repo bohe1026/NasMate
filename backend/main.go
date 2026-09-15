@@ -1285,7 +1285,7 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 		s.store.mu.Unlock()
 		s.store.persist()
 		s.store.appendEvent(resumed.ID, "session.created", map[string]string{"userId": user.ID, "parentTaskId": taskCopy.ID})
-		s.store.appendEvent(resumed.ID, "session.forked", map[string]string{"parentTaskId": taskCopy.ID})
+		s.store.appendEvent(resumed.ID, "session.forked", map[string]string{"parentTaskId": taskCopy.ID, "parentStatus": taskCopy.Status, "parentSummary": taskCopy.Summary})
 		s.store.appendEvent(resumed.ID, "user.message", map[string]string{"prompt": resumed.Prompt})
 		copy := *resumed
 		go s.runTask(ctx, cancel, resumed.ID, resumed.Prompt)

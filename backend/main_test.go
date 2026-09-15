@@ -139,6 +139,10 @@ func TestResumeFinishedTaskCreatesLinkedSession(t *testing.T) {
 	for _, event := range server.store.events[resumed.ID] {
 		if event.Type == "session.forked" {
 			foundFork = true
+			data, ok := event.Data.(map[string]string)
+			if !ok || data["parentTaskId"] != original.ID || data["parentStatus"] == "" {
+				t.Fatalf("fork event lost parent context: %+v", event.Data)
+			}
 		}
 	}
 	if !foundFork {
