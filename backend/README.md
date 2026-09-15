@@ -15,6 +15,8 @@ Persistent task, download, and session state is stored below `UGAPP_DATA_DIR` (`
 
 `UGAPP_HEALTH_INTERVAL` 可选配置定时健康报告，例如 `24h`；未设置时调度器关闭，最小有效间隔为 1 分钟。健康报告最多保留 30 份，旧报告按时间自动清理。
 
+任务创建立即返回 `规划中`，规划与只读工具在受限的后台任务上下文中运行；用户取消会中断模型请求，服务重启不会自动重放遗留的规划或下载。配置 `DEEPSEEK_API_KEY` 后，云端规划器只接收本地分类的工具意图及允许工具，而不接收用户请求原文、NAS 路径或文件内容；模型输入与规划结果分别记入追加式轨迹。包含明显凭据赋值或 Bearer Token 的任务请求在持久化前被拒绝。
+
 ## API surface
 
 - `GET /api/health`
@@ -52,3 +54,4 @@ Storage uses a read-only filesystem provider scoped to `UGAPP_SHARED_DIR`. Docke
 - Health reports and metadata indexes are stored below `UGAPP_DATA_DIR`; report retention is capped at 30 files.
 - Docker diagnostics redact common credential fields before returning logs.
 - Every task and approval emits an append-only event and persists session state below `UGAPP_DATA_DIR` when the UGOS runtime provides it.
+- A natural-language download request without validated sources and an authorized target cannot create a plan or approval. Use `POST /api/downloads/prepare` for a structured plan; only a real user action on its approval endpoint may start a download.

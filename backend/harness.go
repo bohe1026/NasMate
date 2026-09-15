@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -48,6 +49,13 @@ type ModelProvider interface {
 	Plan(context.Context, string, []ToolSpec) (AgentPlan, error)
 }
 
+var credentialAssignment = regexp.MustCompile(`(?i)(?:password|passwd|token|api[_-]?key|authorization|cookie|secret)\s*["']?\s*[:=]\s*["']?\S+`)
+var credentialBearer = regexp.MustCompile(`(?i)\bbearer\s+\S+|\b(?:sk-[a-z0-9_-]{16,}|gh[opsu]_[a-z0-9]{16,})\b`)
+
+func containsCredential(prompt string) bool {
+	return credentialAssignment.MatchString(prompt) || credentialBearer.MatchString(prompt)
+}
+
 func NewHarness() *Harness {
 	h := &Harness{Tools: []ToolSpec{
 		{Name: "search_files", Description: "搜索授权目录中的文件元数据", ReadOnly: true},
@@ -55,7 +63,7 @@ func NewHarness() *Harness {
 		{Name: "storage_usage", Description: "读取授权目录和文件系统容量", ReadOnly: true},
 		{Name: "inspect_containers", Description: "读取 Docker 容器状态和受限日志", ReadOnly: true},
 		{Name: "backup_status", Description: "读取备份状态和恢复有效性", ReadOnly: true},
-		{Name: "prepare_download", Description: "生成下载计划并等待用户确认", ReadOnly: false},
+		{Name: "prepare_download", Description: "下载计划必须由独立接口校验来源和目标目录后创建，模型不能代替用户确认", ReadOnly: false},
 	}}
 	if key := os.Getenv("DEEPSEEK_API_KEY"); key != "" {
 		h.model = OpenAICompatibleProvider{BaseURL: envOr("LLM_BASE_URL", "https://api.deepseek.com"), APIKey: key, Model: envOr("LLM_MODEL", "deepseek-chat")}
@@ -74,17 +82,26 @@ func (h *Harness) ModelStatus() ModelStatus {
 	return ModelStatus{Provider: "规则规划器", Model: "builtin-policy", Configured: true, Mode: "local"}
 }
 
-func (h *Harness) Plan(_ context.Context, prompt string) AgentPlan {
+func (h *Harness) Plan(ctx context.Context, prompt string) AgentPlan {
+	fallback := localPlan(prompt)
 	if h.model != nil {
-		if plan, err := h.model.Plan(context.Background(), prompt, h.Tools); err == nil && validPlan(plan, h.Tools) {
+		if plan, err := h.model.Plan(ctx, modelIntent(fallback), h.Tools); err == nil && validPlan(plan, h.Tools) {
 			return plan
 		}
 	}
+	return fallback
+}
+
+func modelIntent(plan AgentPlan) string {
+	return "本地识别的任务类型：" + plan.Steps[0].Tool + "。仅规划授权的只读工具或待审批计划，不包含用户原文、文件路径或内容。"
+}
+
+func localPlan(prompt string) AgentPlan {
 	prompt = strings.TrimSpace(prompt)
 	steps := make([]PlanStep, 0, 2)
 	switch {
 	case strings.Contains(prompt, "下载"):
-		steps = append(steps, PlanStep{Tool: "prepare_download", Reason: "下载属于外部网络和本地写入操作，必须先生成审批计划"})
+		steps = append(steps, PlanStep{Tool: "prepare_download", Reason: "下载需要结构化来源、授权目录和真实用户审批，对话本身不能创建计划"})
 	case strings.Contains(prompt, "索引"):
 		steps = append(steps, PlanStep{Tool: "search_index", Reason: "查询本地元数据索引，不读取文件正文"})
 	case strings.Contains(prompt, "Docker") || strings.Contains(prompt, "容器"):
@@ -123,6 +140,11 @@ func validPlan(plan AgentPlan, tools []ToolSpec) bool {
 
 type OpenAICompatibleProvider struct{ BaseURL, APIKey, Model string }
 
+func planningSystemPrompt(tools []ToolSpec) string {
+	schema := `{"status":"success","summary":"...","next_actions":["..."],"artifacts":[],"steps":[{"tool":"search_files","reason":"..."}]}`
+	return "Return only JSON matching this shape: " + schema + ". Allowed tools: " + toolNames(tools) + ". Tool execution and user approval are handled locally; do not assume they have occurred."
+}
+
 func (p OpenAICompatibleProvider) Plan(ctx context.Context, prompt string, tools []ToolSpec) (AgentPlan, error) {
 	type request struct {
 		Model          string              `json:"model"`
@@ -130,8 +152,7 @@ func (p OpenAICompatibleProvider) Plan(ctx context.Context, prompt string, tools
 		Temperature    int                 `json:"temperature"`
 		ResponseFormat map[string]string   `json:"response_format"`
 	}
-	schema := `{"status":"success","summary":"...","next_actions":["..."],"artifacts":[],"steps":[{"tool":"search_files","reason":"..."}]}`
-	body, _ := json.Marshal(request{Model: p.Model, Temperature: 0, ResponseFormat: map[string]string{"type": "json_object"}, Messages: []map[string]string{{"role": "system", "content": "Return only JSON matching this shape: " + schema + ". Allowed tools: " + toolNames(tools)}, {"role": "user", "content": prompt}}})
+	body, _ := json.Marshal(request{Model: p.Model, Temperature: 0, ResponseFormat: map[string]string{"type": "json_object"}, Messages: []map[string]string{{"role": "system", "content": planningSystemPrompt(tools)}, {"role": "user", "content": prompt}}})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.BaseURL, "/")+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return AgentPlan{}, err
@@ -154,7 +175,7 @@ func (p OpenAICompatibleProvider) Plan(ctx context.Context, prompt string, tools
 			} `json:"message"`
 		} `json:"choices"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil || len(envelope.Choices) == 0 {
+	if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, 64<<10)).Decode(&envelope); err != nil || len(envelope.Choices) == 0 {
 		return AgentPlan{}, fmt.Errorf("invalid model response")
 	}
 	var plan AgentPlan

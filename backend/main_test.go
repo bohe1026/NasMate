@@ -86,13 +86,13 @@ func TestCreateTaskAndEvents(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&task); err != nil {
 		t.Fatal(err)
 	}
-	if task.ID == "" || task.Status != statusRunning {
+	if task.ID == "" || task.Status != statusPlanning {
 		t.Fatalf("unexpected task: %+v", task)
 	}
 	waitForTaskStatus(t, server, task.ID, statusCompleted)
 	waitForTaskWorker(t, server, task.ID)
-	if len(server.store.events[task.ID]) != 7 {
-		t.Fatalf("expected seven durable events, got %d", len(server.store.events[task.ID]))
+	if events := server.store.events[task.ID]; len(events) != 8 || events[len(events)-1].Type != "session.completed" {
+		t.Fatalf("expected a completed session after eight durable events, got %+v", events)
 	}
 }
 
@@ -197,8 +197,8 @@ func TestCreateTaskRespondsBeforeSlowReadOnlyTool(t *testing.T) {
 		if err := json.Unmarshal(result.Body.Bytes(), &task); err != nil {
 			t.Fatal(err)
 		}
-		if task.Status != statusRunning {
-			t.Fatalf("expected running task while tool is pending, got %+v", task)
+		if task.Status != statusPlanning {
+			t.Fatalf("expected planning task when created, got %+v", task)
 		}
 		cancelled := request(t, server, http.MethodPost, "/api/tasks/"+task.ID+"/cancel", "")
 		if cancelled.Code != http.StatusOK {
@@ -476,7 +476,8 @@ func TestExecuteTaskRunsMultipleReadOnlySteps(t *testing.T) {
 	task := &Task{ID: "multi-step", Prompt: "检查 NAS", Status: statusRunning, CreatedAt: now, UpdatedAt: now, User: User{ID: "dev-user"}}
 	server.store.tasks[task.ID] = task
 	ctx, cancel := context.WithCancel(context.Background())
-	server.executeTask(ctx, cancel, task.ID, task.Prompt, AgentPlan{Status: "success", Steps: []PlanStep{
+	defer cancel()
+	server.executeTask(ctx, task.ID, task.Prompt, AgentPlan{Status: "success", Steps: []PlanStep{
 		{Tool: "storage_usage", Reason: "容量"},
 		{Tool: "inspect_containers", Reason: "容器"},
 	}})
@@ -758,8 +759,36 @@ func TestStorePersistsTasksAndEvents(t *testing.T) {
 	if len(body.Items) != 1 || body.Items[0].ID != created.ID {
 		t.Fatalf("task was not restored: %+v", body.Items)
 	}
-	if len(restarted.store.events[created.ID]) != 7 {
+	if len(restarted.store.events[created.ID]) != 8 || restarted.store.events[created.ID][7].Type != "session.completed" {
 		t.Fatalf("events were not restored: %+v", restarted.store.events[created.ID])
+	}
+}
+
+func TestDownloadRequestWithoutSourcesNeverCreatesFakeApproval(t *testing.T) {
+	server := testServer()
+	res := request(t, server, http.MethodPost, "/api/tasks", `{"prompt":"下载一些公开照片"}`)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("task creation failed: %d: %s", res.Code, res.Body.String())
+	}
+	var task Task
+	if err := json.NewDecoder(res.Body).Decode(&task); err != nil {
+		t.Fatal(err)
+	}
+	waitForTaskStatus(t, server, task.ID, statusFailed)
+	waitForTaskWorker(t, server, task.ID)
+	server.store.mu.RLock()
+	defer server.store.mu.RUnlock()
+	if !strings.Contains(server.store.tasks[task.ID].Summary, "下载计划") || len(server.store.downloads) != 0 {
+		t.Fatalf("unverified download plan was presented: %+v", server.store.tasks[task.ID])
+	}
+	events := server.store.events[task.ID]
+	if events[len(events)-1].Type != "session.failed" {
+		t.Fatalf("failure was not recorded: %+v", events)
+	}
+	for _, event := range events {
+		if event.Type == "approval.requested" || event.Type == "approval.granted" {
+			t.Fatalf("approval without a validated download plan: %+v", event)
+		}
 	}
 }
 

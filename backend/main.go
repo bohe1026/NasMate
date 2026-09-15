@@ -22,6 +22,7 @@ import (
 )
 
 const (
+	statusPlanning  = "规划中"
 	statusRunning   = "运行中"
 	statusPending   = "待确认"
 	statusCompleted = "已完成"
@@ -321,7 +322,7 @@ func (s *Store) reconcileInterruptedRuns() {
 	var interrupted []string
 	s.mu.Lock()
 	for id, task := range s.tasks {
-		if task.Status == statusRunning {
+		if task.Status == statusRunning || task.Status == statusPlanning {
 			task.Status = statusFailed
 			task.Summary = "服务重启中断，未继续执行；请重新发起任务"
 			task.UpdatedAt = time.Now().UTC()
@@ -839,9 +840,12 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "prompt 长度必须在 2 到 2000 个字符之间")
 			return
 		}
+		if containsCredential(req.Prompt) {
+			writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "请求中不能包含凭据，请移除后重试")
+			return
+		}
 		now := time.Now().UTC()
-		plan := s.harness.Plan(r.Context(), strings.TrimSpace(req.Prompt))
-		task := &Task{ID: newID("task"), Prompt: strings.TrimSpace(req.Prompt), Status: statusRunning, Summary: plan.Summary, CreatedAt: now, UpdatedAt: now, User: user}
+		task := &Task{ID: newID("task"), Prompt: strings.TrimSpace(req.Prompt), Status: statusPlanning, Summary: "正在规划受限工具步骤", CreatedAt: now, UpdatedAt: now, User: user}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		s.taskMu.Lock()
 		s.tasksCtx[task.ID] = cancel
@@ -852,36 +856,68 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		s.store.persist()
 		s.store.appendEvent(task.ID, "session.created", map[string]string{"userId": user.ID})
 		s.store.appendEvent(task.ID, "user.message", map[string]string{"prompt": task.Prompt})
-		s.store.appendEvent(task.ID, "agent.plan", map[string]any{"mode": "policy-constrained", "scope": s.config.SharedRoots, "plan": plan})
-		s.store.appendEvent(task.ID, "task.progress", map[string]string{"message": "已完成权限检查"})
 		taskCopy := *task
-		go s.executeTask(ctx, cancel, task.ID, task.Prompt, plan)
+		go s.runTask(ctx, cancel, task.ID, task.Prompt)
 		writeJSON(w, http.StatusCreated, taskCopy)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
 	}
 }
 
-func (s *Server) executeTask(ctx context.Context, cancel context.CancelFunc, id, prompt string, plan AgentPlan) {
+func (s *Server) runTask(ctx context.Context, cancel context.CancelFunc, id, prompt string) {
 	defer func() {
 		s.taskMu.Lock()
 		delete(s.tasksCtx, id)
 		s.taskMu.Unlock()
 		cancel()
 	}()
+	if s.harness.model != nil && ctx.Err() == nil {
+		input := map[string]any{"summary": "模型仅接收本地提炼的工具意图", "input": modelIntent(localPlan(prompt)), "tools": s.harness.Tools}
+		if _, ok := s.harness.model.(OpenAICompatibleProvider); ok {
+			input["system"] = planningSystemPrompt(s.harness.Tools)
+		}
+		s.store.appendEvent(id, "model.input", input)
+	}
+	plan := s.harness.Plan(ctx, prompt)
+	if ctx.Err() != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			s.finishTask(id, statusFailed, "任务规划超时，请重新发起任务")
+		}
+		return
+	}
+	s.store.mu.Lock()
+	task, ok := s.store.tasks[id]
+	if ok && task.Status == statusPlanning {
+		task.Status = statusRunning
+		task.Summary = "已生成受策略约束的工具计划"
+		task.UpdatedAt = time.Now().UTC()
+	} else {
+		ok = false
+	}
+	s.store.mu.Unlock()
+	if !ok {
+		return
+	}
+	s.store.persist()
+	s.store.appendEvent(id, "agent.plan", map[string]any{"mode": "policy-constrained", "scope": s.config.SharedRoots, "plan": plan})
+	s.store.appendEvent(id, "task.progress", map[string]string{"message": "已完成权限检查"})
+	if ctx.Err() != nil {
+		return
+	}
+	s.executeTask(ctx, id, prompt, plan)
+}
+
+func (s *Server) executeTask(ctx context.Context, id, prompt string, plan AgentPlan) {
 	if len(plan.Steps) == 0 {
 		s.finishTask(id, statusFailed, "没有可执行的工具步骤")
 		return
 	}
-	readOnlySteps := 0
 	for _, step := range plan.Steps {
-		if step.Tool != "prepare_download" {
-			readOnlySteps++
+		if step.Tool == "prepare_download" {
+			s.store.appendEvent(id, "tool.result", map[string]any{"status": "warning", "summary": "对话中缺少经过校验的来源与目标目录，未创建下载计划", "next_actions": []string{"在下载页面填写来源、许可证和授权目录后生成计划"}, "artifacts": []string{}})
+			s.finishTask(id, statusFailed, "未创建下载计划：请在下载页面提供来源、许可证和目标目录后重新准备")
+			return
 		}
-	}
-	if readOnlySteps == 0 {
-		s.finishTask(id, statusPending, "已生成下载计划，等待用户确认")
-		return
 	}
 	for index, step := range plan.Steps {
 		if ctx.Err() != nil {
@@ -892,11 +928,6 @@ func (s *Server) executeTask(ctx context.Context, cancel context.CancelFunc, id,
 		if index >= 3 {
 			s.store.appendEvent(id, "task.progress", map[string]any{"status": "warning", "summary": "已达到单任务工具调用上限", "next_actions": []string{"拆分任务后重试"}})
 			break
-		}
-		if step.Tool == "prepare_download" {
-			// Planning a write is intentionally separated from execution. The
-			// download approval endpoint is the only path that can start it.
-			continue
 		}
 		s.store.appendEvent(id, "tool.call", map[string]any{"name": step.Tool, "input": map[string]string{"prompt": prompt}})
 		result, err := s.executeReadOnlyTool(ctx, step.Tool, prompt)
@@ -944,7 +975,7 @@ func extractSearchKeyword(prompt string) string {
 func (s *Server) finishTask(id, status, summary string) {
 	s.store.mu.Lock()
 	task, ok := s.store.tasks[id]
-	if ok && task.Status == statusRunning {
+	if ok && (task.Status == statusRunning || task.Status == statusPlanning) {
 		task.Status = status
 		task.Summary = summary
 		task.UpdatedAt = time.Now().UTC()
@@ -955,6 +986,12 @@ func (s *Server) finishTask(id, status, summary string) {
 	if ok {
 		s.store.persist()
 		s.store.appendEvent(id, "task.progress", map[string]string{"status": status, "summary": summary})
+		switch status {
+		case statusCompleted:
+			s.store.appendEvent(id, "session.completed", map[string]string{"summary": summary})
+		case statusFailed:
+			s.store.appendEvent(id, "session.failed", map[string]string{"summary": summary})
+		}
 	}
 }
 
