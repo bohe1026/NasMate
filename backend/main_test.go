@@ -346,12 +346,15 @@ func TestRejectPrivateHost(t *testing.T) {
 func TestGenerateHealthReportPersistsArtifact(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: filepath.Join(root, "data"), MaxBodyBytes: 1 << 20})
+	server.store.tasks["private-task"] = &Task{ID: "private-task", Status: statusFailed, User: User{ID: "dev-user"}}
+	server.store.downloads["private-download"] = &DownloadPlan{ID: "private-download", Status: statusFailed, User: User{ID: "dev-user"}}
 	res := request(t, server, http.MethodPost, "/api/reports/health/generate", "")
 	if res.Code != http.StatusCreated {
 		t.Fatalf("expected report creation, got %d: %s", res.Code, res.Body.String())
 	}
 	var body struct {
-		Artifact string `json:"artifact"`
+		Artifact string       `json:"artifact"`
+		Report   HealthReport `json:"report"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatal(err)
@@ -359,8 +362,22 @@ func TestGenerateHealthReportPersistsArtifact(t *testing.T) {
 	if body.Artifact == "" {
 		t.Fatal("expected persisted report artifact path")
 	}
+	if body.Report.FailedTasks != 1 || body.Report.FailedDownloads != 1 {
+		t.Fatalf("interactive user report omitted private status: %+v", body.Report)
+	}
 	if _, err := os.Stat(body.Artifact); err != nil {
 		t.Fatalf("report artifact not persisted: %v", err)
+	}
+	artifactBytes, err := os.ReadFile(body.Artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved HealthReport
+	if err := json.Unmarshal(artifactBytes, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if !saved.UserMetricsOmitted || saved.FailedTasks != 0 || saved.FailedDownloads != 0 {
+		t.Fatalf("shared artifact exposed private task status: %+v", saved)
 	}
 	res = request(t, server, http.MethodGet, "/api/artifacts/"+filepath.Base(body.Artifact), "")
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "readOnly") {

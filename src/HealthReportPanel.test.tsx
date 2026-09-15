@@ -14,6 +14,8 @@ beforeEach(() => {
     docker: [{ container: { name: 'paperless', status: 'unhealthy' }, findings: ['健康检查返回 503'] }],
     backup: { name: '夜间备份', lastRunStatus: 'success', recoveryReady: true },
     failedTasks: 2,
+    failedDownloads: 1,
+    fastestGrowing: [{ path: '/photos', deltaBytes: 200 * 1024 * 1024 }],
     warnings: ['有一个容器需要关注'],
     readOnly: true,
   }))
@@ -24,6 +26,8 @@ describe('health report snapshot', () => {
     render(<HealthReportPanel />)
     await screen.findByText('有一个容器需要关注')
     expect(screen.getByText('失败任务 2')).toBeTruthy()
+    expect(screen.getByText('失败下载 1')).toBeTruthy()
+    expect(screen.getByText('/photos')).toBeTruthy()
     expect(screen.getByText('paperless')).toBeTruthy()
     expect(screen.getByText('夜间备份')).toBeTruthy()
     expect(screen.getByText('家庭影像增长较快')).toBeTruthy()
