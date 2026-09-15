@@ -1191,17 +1191,16 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	action := r.URL.Query().Get("action")
+	s.downloadMu.Lock()
+	defer s.downloadMu.Unlock()
 	if action == "cancel" {
 		if planCopy.Status != statusRunning && planCopy.Status != statusPending {
 			writeError(w, http.StatusConflict, "VALIDATION_FAILED", "当前下载任务不能取消")
 			return
 		}
-		s.downloadMu.Lock()
 		if cancel, exists := s.downloadsCtx[id]; exists {
 			cancel()
-			delete(s.downloadsCtx, id)
 		}
-		s.downloadMu.Unlock()
 		s.store.mu.Lock()
 		if current, exists := s.store.downloads[id]; exists && (current.Status == statusPending || current.Status == statusRunning) {
 			current.Status = statusCancelled
@@ -1221,6 +1220,11 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	if action == "approve" {
+		if len(s.downloadsCtx) >= 3 {
+			s.store.mu.Unlock()
+			writeError(w, http.StatusTooManyRequests, "RATE_LIMITED", "最多同时运行 3 个下载任务，请稍后确认")
+			return
+		}
 		now := time.Now().UTC()
 		plan.Status = statusRunning
 		plan.ApprovedAt = &now
@@ -1237,9 +1241,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 	s.store.appendEvent(id, eventType, map[string]string{"userId": user.ID})
 	if action == "approve" {
 		ctx, cancel := context.WithCancel(context.Background())
-		s.downloadMu.Lock()
 		s.downloadsCtx[id] = cancel
-		s.downloadMu.Unlock()
 		go s.executeDownload(ctx, id)
 	}
 	writeJSON(w, http.StatusOK, &planCopy)
