@@ -1637,6 +1637,10 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 		writeJSON(w, http.StatusOK, &planCopy)
 		return
 	}
+	if action := r.URL.Query().Get("action"); action == "approve" && s.stopping.Load() {
+		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "应用正在关闭，暂不能启动下载")
+		return
+	}
 	s.store.mu.Lock()
 	if plan.Status != statusPending {
 		s.store.mu.Unlock()
@@ -1644,7 +1648,8 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	if action == "approve" {
-		if len(s.downloadsCtx) >= 3 {
+		atLimit := len(s.downloadsCtx) >= 3
+		if atLimit {
 			s.store.mu.Unlock()
 			writeError(w, http.StatusTooManyRequests, "RATE_LIMITED", "最多同时运行 3 个下载任务，请稍后确认")
 			return
