@@ -884,7 +884,10 @@ func (s *Server) runTask(ctx context.Context, cancel context.CancelFunc, id, pro
 		}
 		s.store.appendEvent(id, "model.input", input)
 	}
-	plan := s.harness.Plan(ctx, prompt)
+	plan, observation := s.harness.planWithTrace(ctx, prompt)
+	if observation != nil {
+		s.store.appendEvent(id, "model.result", observation)
+	}
 	if ctx.Err() != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			s.finishTask(id, statusFailed, "任务规划超时，请重新发起任务")

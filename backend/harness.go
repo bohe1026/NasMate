@@ -33,6 +33,14 @@ type AgentPlan struct {
 	Steps       []PlanStep `json:"steps"`
 }
 
+type ModelObservation struct {
+	Status      string     `json:"status"`
+	Summary     string     `json:"summary"`
+	NextActions []string   `json:"next_actions"`
+	Artifacts   []string   `json:"artifacts"`
+	Plan        *AgentPlan `json:"plan,omitempty"`
+}
+
 type Harness struct {
 	Tools []ToolSpec
 	model ModelProvider
@@ -83,13 +91,23 @@ func (h *Harness) ModelStatus() ModelStatus {
 }
 
 func (h *Harness) Plan(ctx context.Context, prompt string) AgentPlan {
+	plan, _ := h.planWithTrace(ctx, prompt)
+	return plan
+}
+
+func (h *Harness) planWithTrace(ctx context.Context, prompt string) (AgentPlan, *ModelObservation) {
 	fallback := localPlan(prompt)
 	if h.model != nil {
-		if plan, err := h.model.Plan(ctx, modelIntent(fallback), h.Tools); err == nil && validPlan(plan, h.Tools) {
-			return plan
+		plan, err := h.model.Plan(ctx, modelIntent(fallback), h.Tools)
+		if err == nil && validPlan(plan, h.Tools) {
+			return plan, &ModelObservation{Status: "success", Summary: "模型计划通过本地工具白名单校验", NextActions: []string{"按策略检查工具步骤"}, Artifacts: []string{}, Plan: &plan}
 		}
+		if ctx.Err() != nil {
+			return fallback, &ModelObservation{Status: "warning", Summary: "模型请求已取消或超时，不执行其计划", NextActions: []string{"由用户重新发起任务"}, Artifacts: []string{}}
+		}
+		return fallback, &ModelObservation{Status: "warning", Summary: "模型请求失败或计划未通过工具白名单，已使用本地规则", NextActions: []string{"检查模型配置后重试", "查看本地规则计划"}, Artifacts: []string{}}
 	}
-	return fallback
+	return fallback, nil
 }
 
 func modelIntent(plan AgentPlan) string {

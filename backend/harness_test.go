@@ -211,6 +211,39 @@ func (model blockingModel) Plan(ctx context.Context, _ string, _ []ToolSpec) (Ag
 	return AgentPlan{}, ctx.Err()
 }
 
+type failingModel struct{ err error }
+
+func (model failingModel) Plan(context.Context, string, []ToolSpec) (AgentPlan, error) {
+	return AgentPlan{}, model.err
+}
+
+func TestFailedModelFallsBackWithSanitizedObservation(t *testing.T) {
+	server := testServer()
+	server.harness.model = failingModel{err: errors.New("upstream failure: credential-abc")}
+	res := request(t, server, http.MethodPost, "/api/tasks", `{"prompt":"检查 NAS 空间"}`)
+	var task Task
+	if err := json.NewDecoder(res.Body).Decode(&task); err != nil {
+		t.Fatal(err)
+	}
+	waitForTaskStatus(t, server, task.ID, statusCompleted)
+	waitForTaskWorker(t, server, task.ID)
+	server.store.mu.RLock()
+	defer server.store.mu.RUnlock()
+	found := false
+	for _, event := range server.store.events[task.ID] {
+		if event.Type == "model.result" {
+			payload, _ := json.Marshal(event.Data)
+			if !strings.Contains(string(payload), `"status":"warning"`) || strings.Contains(string(payload), "credential-abc") {
+				t.Fatalf("model fallback leaked a secret or lost its status: %s", payload)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("model fallback was not recorded")
+	}
+}
+
 func TestOpenAICompatiblePlanningRequestRecordsNoOriginalUserData(t *testing.T) {
 	received := make(chan map[string]any, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -229,6 +262,10 @@ func TestOpenAICompatiblePlanningRequestRecordsNoOriginalUserData(t *testing.T) 
 	if res.Code != http.StatusCreated {
 		t.Fatalf("task creation failed: %d", res.Code)
 	}
+	var task Task
+	if err := json.NewDecoder(res.Body).Decode(&task); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case body := <-received:
 		encoded, _ := json.Marshal(body)
@@ -237,5 +274,22 @@ func TestOpenAICompatiblePlanningRequestRecordsNoOriginalUserData(t *testing.T) 
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("model request did not arrive")
+	}
+	waitForTaskStatus(t, server, task.ID, statusCompleted)
+	waitForTaskWorker(t, server, task.ID)
+	server.store.mu.RLock()
+	defer server.store.mu.RUnlock()
+	found := false
+	for _, event := range server.store.events[task.ID] {
+		if event.Type == "model.result" {
+			payload, _ := json.Marshal(event.Data)
+			if !strings.Contains(string(payload), `"status":"success"`) || !strings.Contains(string(payload), "storage_usage") || strings.Contains(string(payload), "local-test-key") {
+				t.Fatalf("model result was not a safe validated plan: %s", payload)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("validated model result was not recorded")
 	}
 }
