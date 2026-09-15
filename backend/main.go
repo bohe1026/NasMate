@@ -1019,8 +1019,12 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 		ok = false
 	}
 	var taskCopy Task
+	var taskStatus string
+	var taskPrompt string
 	if ok {
 		taskCopy = *task
+		taskStatus = task.Status
+		taskPrompt = task.Prompt
 	}
 	events := append([]Event(nil), s.store.events[id]...)
 	s.store.mu.RUnlock()
@@ -1067,16 +1071,16 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
 			return
 		}
-		if task.Status == statusRunning || task.Status == statusPlanning {
+		if taskStatus == statusRunning || taskStatus == statusPlanning {
 			writeError(w, http.StatusConflict, "VALIDATION_FAILED", "任务仍在运行，不能继续发起")
 			return
 		}
-		if containsCredential(task.Prompt) {
+		if containsCredential(taskPrompt) {
 			writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "原任务包含凭据，不能继续发起")
 			return
 		}
 		now := time.Now().UTC()
-		resumed := &Task{ID: newID("task"), Prompt: task.Prompt, Status: statusPlanning, Summary: "正在继续规划受限工具步骤", CreatedAt: now, UpdatedAt: now, User: user, ParentTaskID: task.ID}
+		resumed := &Task{ID: newID("task"), Prompt: taskPrompt, Status: statusPlanning, Summary: "正在继续规划受限工具步骤", CreatedAt: now, UpdatedAt: now, User: user, ParentTaskID: taskCopy.ID}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		s.taskMu.Lock()
 		if len(s.tasksCtx) >= 3 {
@@ -1091,8 +1095,8 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request, suffix strin
 		s.store.tasks[resumed.ID] = resumed
 		s.store.mu.Unlock()
 		s.store.persist()
-		s.store.appendEvent(resumed.ID, "session.created", map[string]string{"userId": user.ID, "parentTaskId": task.ID})
-		s.store.appendEvent(resumed.ID, "session.forked", map[string]string{"parentTaskId": task.ID})
+		s.store.appendEvent(resumed.ID, "session.created", map[string]string{"userId": user.ID, "parentTaskId": taskCopy.ID})
+		s.store.appendEvent(resumed.ID, "session.forked", map[string]string{"parentTaskId": taskCopy.ID})
 		s.store.appendEvent(resumed.ID, "user.message", map[string]string{"prompt": resumed.Prompt})
 		copy := *resumed
 		go s.runTask(ctx, cancel, resumed.ID, resumed.Prompt)
