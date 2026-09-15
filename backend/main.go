@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -221,6 +220,7 @@ type DownloadPlan struct {
 	ApprovedAt      *time.Time       `json:"approvedAt,omitempty"`
 	DownloadedBytes int64            `json:"downloadedBytes"`
 	CurrentSource   string           `json:"currentSource,omitempty"`
+	ErrorCode       string           `json:"errorCode,omitempty"`
 	User            User             `json:"user"`
 }
 
@@ -1102,13 +1102,8 @@ func (s *Server) handlePrepareDownload(w http.ResponseWriter, r *http.Request) {
 	var total int64
 	for i := range req.Sources {
 		source := &req.Sources[i]
-		parsed, err := url.ParseRequestURI(source.URL)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || hasSensitiveURLQuery(parsed) {
-			writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "下载来源必须是有效的 HTTP(S) URL")
-			return
-		}
-		if source.SizeBytes < 0 || source.SizeBytes > 10<<30 {
-			writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "单个下载文件大小超出限制")
+		if err := validateDownloadSource(*source); err != nil {
+			writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "下载来源需提供公开 HTTP(S) URL、受支持的文件类型、许可证或使用说明及 1B 到 10GB 的大小上限")
 			return
 		}
 		total += source.SizeBytes
@@ -1248,135 +1243,6 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 		go s.executeDownload(ctx, id)
 	}
 	writeJSON(w, http.StatusOK, &planCopy)
-}
-
-func (s *Server) executeDownload(ctx context.Context, id string) {
-	defer func() {
-		s.downloadMu.Lock()
-		delete(s.downloadsCtx, id)
-		s.downloadMu.Unlock()
-	}()
-	s.store.mu.RLock()
-	plan, ok := s.store.downloads[id]
-	if !ok {
-		s.store.mu.RUnlock()
-		return
-	}
-	copyPlan := *plan
-	s.store.mu.RUnlock()
-	for _, source := range copyPlan.Sources {
-		if err := ctx.Err(); err != nil {
-			return
-		}
-		parsed, err := parseSourceURL(source.URL)
-		if err != nil {
-			s.failDownload(id, err)
-			return
-		}
-		name := filepath.Base(parsed.Path)
-		if name == "." || name == "/" || name == "" {
-			name = "download-" + newID("file")
-		}
-		path := filepath.Join(copyPlan.TargetDirectory, name)
-		if _, err := s.resolveAuthorizedPath(path); err != nil {
-			s.failDownload(id, errForbidden)
-			return
-		}
-		if _, err := os.Stat(path); err == nil {
-			s.failDownload(id, fmt.Errorf("target file already exists"))
-			return
-		} else if !errors.Is(err, os.ErrNotExist) {
-			s.failDownload(id, err)
-			return
-		}
-		s.updateDownload(id, 0, source.Title)
-		var resp *http.Response
-		var requestErr error
-		for attempt := 1; attempt <= 3; attempt++ {
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, nil)
-			if err != nil {
-				requestErr = err
-				break
-			}
-			resp, requestErr = s.publicHTTPClient(60 * time.Second).Do(req)
-			if requestErr == nil || errors.Is(requestErr, context.Canceled) || errors.Is(requestErr, errNonPublicAddress) {
-				break
-			}
-			if attempt < 3 {
-				s.store.appendEvent(id, "task.retry", map[string]any{"source": source.Title, "attempt": attempt + 1})
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(time.Duration(attempt) * 100 * time.Millisecond):
-				}
-			}
-		}
-		if requestErr != nil {
-			if errors.Is(requestErr, context.Canceled) {
-				return
-			}
-			s.failDownload(id, requestErr)
-			return
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			resp.Body.Close()
-			s.failDownload(id, fmt.Errorf("download status %d", resp.StatusCode))
-			return
-		}
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-		if err != nil {
-			resp.Body.Close()
-			s.failDownload(id, err)
-			return
-		}
-		written, copyErr := io.Copy(file, io.LimitReader(resp.Body, 10<<30+1))
-		if written > 10<<30 {
-			copyErr = fmt.Errorf("download exceeds 10GB limit")
-		}
-		file.Close()
-		resp.Body.Close()
-		if copyErr != nil {
-			if errors.Is(copyErr, context.Canceled) {
-				return
-			}
-			s.failDownload(id, copyErr)
-			return
-		}
-		s.updateDownload(id, written, "")
-	}
-	s.store.mu.Lock()
-	if plan, ok := s.store.downloads[id]; ok {
-		plan.Status = statusCompleted
-		plan.CurrentSource = ""
-	}
-	s.store.mu.Unlock()
-	s.store.persist()
-	s.store.appendEvent(id, "task.progress", map[string]string{"status": statusCompleted, "summary": "下载完成"})
-}
-
-func (s *Server) updateDownload(id string, bytes int64, source string) {
-	s.store.mu.Lock()
-	if plan, ok := s.store.downloads[id]; ok {
-		plan.DownloadedBytes += bytes
-		plan.CurrentSource = source
-	}
-	s.store.mu.Unlock()
-	s.store.persist()
-	s.store.appendEvent(id, "task.progress", map[string]any{"downloadedBytes": bytes, "currentSource": source})
-}
-func (s *Server) failDownload(id string, err error) {
-	s.store.mu.Lock()
-	if plan, ok := s.store.downloads[id]; ok {
-		if plan.Status == statusCancelled {
-			s.store.mu.Unlock()
-			return
-		}
-		plan.Status = statusFailed
-		plan.CurrentSource = ""
-	}
-	s.store.mu.Unlock()
-	s.store.persist()
-	s.store.appendEvent(id, "task.progress", map[string]string{"status": statusFailed, "summary": "下载失败", "reason": err.Error()})
 }
 
 func (s *Server) authorizePath(candidate string) bool {
