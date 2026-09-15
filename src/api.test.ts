@@ -37,4 +37,14 @@ describe('UGOS API authentication', () => {
     const headers = fetchMock.mock.calls[0][1].headers as Headers
     expect(headers.get('Ugreen-Ttk')).toBe('safe-token')
   })
+
+  it('does not block local Vite requests when token capacity never resolves', async () => {
+    sdk.init.mockResolvedValue(undefined)
+    sdk.useCapacity.mockReturnValue(new Promise(() => {}))
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ status: 'ok' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { apiFetch } = await import('./api')
+    await expect(apiFetch('/api/health')).resolves.toBeInstanceOf(Response)
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
 })
