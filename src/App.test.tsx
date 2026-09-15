@@ -74,3 +74,23 @@ it('refreshes the event trail after cancelling a task', async () => {
   await waitFor(() => expect(eventReads).toBe(2))
   expect(screen.getByText('task.cancelled')).toBeTruthy()
 })
+
+it('shows the complete dry run preview without executing file changes', async () => {
+  const result = {
+    dryRun: true, summary: '已生成批量整理预览，未修改任何文件', spaceDelta: 0,
+    items: Array.from({ length: 12 }, (_, i) => ({ source: `/photos/image-${i}.jpg`, destination: `/photos/2026-09/image-${i}.jpg`, reason: '按日期整理' })),
+    conflicts: ['/photos/2026-09/existing.jpg'], skipped: ['/photos/already-filed.jpg'],
+  }
+  const fallback = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (input, init) => String(input) === '/api/organize/dry-run' ? Response.json(result) : fallback(input, init))
+  const user = userEvent.setup()
+  render(<App />)
+  await user.click(screen.getByRole('button', { name: '常用能力' }))
+  await user.type(screen.getByRole('textbox', { name: '整理授权目录' }), '/photos')
+  await user.click(screen.getByRole('button', { name: '生成预览' }))
+  await screen.findByText('/photos/2026-09/image-11.jpg')
+  expect(screen.getByText('/photos/2026-09/existing.jpg')).toBeTruthy()
+  expect(screen.getByText('/photos/already-filed.jpg')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /执行整理/ })).toBeNull()
+  expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST').map(([url]) => url)).toEqual(['/api/organize/dry-run'])
+})
