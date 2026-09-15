@@ -31,7 +31,7 @@ describe('network source workflow', () => {
   it('shows HTTP status, media type and size without creating a download', async () => {
     const user = userEvent.setup()
     render(<App />)
-    await user.click(screen.getByRole('button', { name: '下载任务', exact: true }))
+    await user.click(screen.getByRole('button', { name: '下载任务' }))
     await user.type(screen.getByRole('textbox', { name: '待探测的来源 URL' }), 'https://example.com/file.jpg')
     await user.click(screen.getByRole('button', { name: '开始探测' }))
     await screen.findByText('HTTP 200')
@@ -43,7 +43,7 @@ describe('network source workflow', () => {
   it('invalidates a successful probe when the URL changes', async () => {
     const user = userEvent.setup()
     render(<App />)
-    await user.click(screen.getByRole('button', { name: '下载任务', exact: true }))
+    await user.click(screen.getByRole('button', { name: '下载任务' }))
     const input = screen.getByRole('textbox', { name: '待探测的来源 URL' })
     await user.type(input, 'https://example.com/file.jpg')
     await user.click(screen.getByRole('button', { name: '开始探测' }))
@@ -56,7 +56,7 @@ describe('network source workflow', () => {
     networkReply = { items: [{ accessible: false, error: 'POLICY_BLOCKED', sizeBytes: -1 }] }
     const user = userEvent.setup()
     render(<App />)
-    await user.click(screen.getByRole('button', { name: '下载任务', exact: true }))
+    await user.click(screen.getByRole('button', { name: '下载任务' }))
     await user.type(screen.getByRole('textbox', { name: '待探测的来源 URL' }), 'http://127.0.0.1/file.jpg')
     await user.click(screen.getByRole('button', { name: '开始探测' }))
     await screen.findByText('已拦截非公网地址，不会访问 NAS 或局域网服务。')
@@ -67,7 +67,7 @@ it('refreshes the event trail after cancelling a task', async () => {
   taskReply = [runningTask]
   const user = userEvent.setup()
   render(<App />)
-  await user.click(await screen.findByRole('button', { name: '检查备份', exact: true }))
+  await user.click(await screen.findByRole('button', { name: '检查备份' }))
   await waitFor(() => expect(eventReads).toBe(1))
   await user.click(screen.getByRole('button', { name: '取消任务' }))
   await screen.findByText('已取消')
