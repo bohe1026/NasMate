@@ -97,6 +97,18 @@ function App() {
     return () => { live = false }
   }, [activeId, eventsRevision])
   useEffect(() => {
+    if (!activeId || (activeTask?.status !== '运行中' && activeTask?.status !== '规划中')) return
+    let live = true
+    const timer = window.setInterval(() => {
+      void apiFetch(`/api/tasks/${encodeURIComponent(activeId)}`).then(readJSON<Task>).then((task) => {
+        if (!live) return
+        setTasks((current) => current.map((item) => item.id === task.id ? task : item))
+        setEventsRevision((value) => value + 1)
+      }).catch(() => undefined)
+    }, 2000)
+    return () => { live = false; window.clearInterval(timer) }
+  }, [activeId, activeTask?.status])
+  useEffect(() => {
     if (page !== 'downloads' || !plans.some((plan) => plan.status === '运行中')) return
     const timer = window.setInterval(() => {
       void apiFetch('/api/downloads').then(readJSON<{ items: DownloadPlan[] }>).then((data) => setPlans(data.items ?? [])).catch(() => undefined)
