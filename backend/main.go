@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1404,7 +1405,9 @@ func redactSecrets(value string) string {
 			}
 		}
 	}
-	return strings.Join(fields, " ")
+	value = strings.Join(fields, " ")
+	jsonSecret := regexp.MustCompile(`(?i)("(?:password|passwd|token|api[_-]?key|authorization|cookie|secret)"\s*:\s*")[^"]*(")`)
+	return jsonSecret.ReplaceAllString(value, `${1}[REDACTED]${2}`)
 }
 
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {

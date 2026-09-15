@@ -564,6 +564,10 @@ func TestRedactSecrets(t *testing.T) {
 	if strings.Contains(got, "abc") || strings.Contains(got, "hunter2") || !strings.Contains(got, "[REDACTED]") {
 		t.Fatalf("secrets were not redacted: %s", got)
 	}
+	jsonLog := redactSecrets(`{"token":"abc","nested":{"password":"hunter2"},"status":"ok"}`)
+	if strings.Contains(jsonLog, "abc") || strings.Contains(jsonLog, "hunter2") || !strings.Contains(jsonLog, "[REDACTED]") {
+		t.Fatalf("JSON secrets were not redacted: %s", jsonLog)
+	}
 }
 
 func TestRejectPrivateHost(t *testing.T) {
