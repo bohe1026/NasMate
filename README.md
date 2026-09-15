@@ -61,7 +61,8 @@ rootfs_arm64/bin/ugreen-ai-backend # Linux arm64
 - `GET /api/health`
 - `GET|POST /api/tasks`
 - `GET /api/tasks/{id}`
-- `GET /api/tasks/{id}/events`
+- `POST /api/tasks/{id}/resume`
+- `GET /api/tasks/{id}/events?limit=1..200&before=<eventId>`
 - `POST /api/tasks/{id}/cancel`
 - `GET /api/storage/usage`
 - `GET /api/files/search`
@@ -80,6 +81,6 @@ rootfs_arm64/bin/ugreen-ai-backend # Linux arm64
 - `POST /api/downloads/prepare`
 - `GET /api/downloads`
 - `GET /api/downloads/{id}`
-- `POST /api/downloads/{id}?action=approve|deny`
+- `POST /api/downloads/{id}?action=approve|deny|cancel`
 
 下载计划只允许写入 `UGAPP_SHARED_DIR` 下的授权路径，并且始终从 `待确认` 状态开始。文件搜索和存储统计只读取授权目录；生产模式下 Docker 和备份能力在适配器接入前明确返回不可用，只有显式 `UGOS_DEV_MODE=1` 才启用本地测试数据。不执行任意 Shell，不修改容器。
