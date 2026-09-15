@@ -32,6 +32,25 @@ describe('file metadata search panel', () => {
     expect(String(call?.[0])).toContain('rootPath=%2Fphotos')
     expect(screen.queryByText(/report contents/)).toBeNull()
   })
+
+  it('cancels a pending search and shows no stale result', async () => {
+    const user = userEvent.setup()
+    let resolveRequest!: (response: Response) => void
+    const pending = new Promise<Response>((resolve) => { resolveRequest = resolve })
+    fetchMock.mockImplementationOnce(async (_input, init) => {
+      const signal = init?.signal as AbortSignal
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+      return pending
+    })
+    render(<FileSearchPanel />)
+    await user.type(screen.getByRole('textbox', { name: '文件关键词' }), 'report')
+    await user.click(screen.getByRole('button', { name: '搜索文件' }))
+    await user.click(await screen.findByRole('button', { name: '取消搜索' }))
+    expect(screen.getByText('文件搜索已取消。')).toBeTruthy()
+    resolveRequest(Response.json({ items: [{ name: 'stale.txt' }], total: 1 }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.queryByText('stale.txt')).toBeNull()
+  })
 })
 
 describe('docker read-only panel', () => {
