@@ -487,16 +487,17 @@ func (MockBackup) Status(context.Context) (BackupStatus, error) {
 }
 
 type Server struct {
-	config       Config
-	store        *Store
-	storage      StorageProvider
-	docker       DockerProvider
-	backup       BackupProvider
-	harness      *Harness
-	downloadMu   sync.Mutex
-	downloadsCtx map[string]context.CancelFunc
-	rateMu       sync.Mutex
-	rateBuckets  map[string]rateBucket
+	config          Config
+	store           *Store
+	storage         StorageProvider
+	docker          DockerProvider
+	backup          BackupProvider
+	harness         *Harness
+	downloadMu      sync.Mutex
+	downloadsCtx    map[string]context.CancelFunc
+	rateMu          sync.Mutex
+	rateBuckets     map[string]rateBucket
+	sourceTransport http.RoundTripper
 }
 
 type rateBucket struct {
@@ -511,7 +512,7 @@ func NewServer(config Config) *Server {
 		docker = MockDocker{}
 		backup = MockBackup{}
 	}
-	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness(), downloadsCtx: make(map[string]context.CancelFunc), rateBuckets: make(map[string]rateBucket)}
+	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness(), downloadsCtx: make(map[string]context.CancelFunc), rateBuckets: make(map[string]rateBucket), sourceTransport: newPublicTransport()}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -533,7 +534,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if (r.URL.Path == "/api/files/search") || (r.URL.Path == "/api/tasks" && r.Method == http.MethodPost) {
 		limit = 20
 	}
-	if r.URL.Path == "/api/downloads/prepare" {
+	if r.URL.Path == "/api/downloads/prepare" || r.URL.Path == "/api/network/sources/probe" {
 		limit = 10
 	}
 	if !s.allowRequest(user.ID, r.URL.Path, limit) {
@@ -1267,7 +1268,7 @@ func (s *Server) executeDownload(ctx context.Context, id string) {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		parsed, err := url.Parse(source.URL)
+		parsed, err := parseSourceURL(source.URL)
 		if err != nil {
 			s.failDownload(id, err)
 			return
@@ -1297,8 +1298,8 @@ func (s *Server) executeDownload(ctx context.Context, id string) {
 				requestErr = err
 				break
 			}
-			resp, requestErr = (&http.Client{Timeout: 60 * time.Second}).Do(req)
-			if requestErr == nil || errors.Is(requestErr, context.Canceled) {
+			resp, requestErr = s.publicHTTPClient(60 * time.Second).Do(req)
+			if requestErr == nil || errors.Is(requestErr, context.Canceled) || errors.Is(requestErr, errNonPublicAddress) {
 				break
 			}
 			if attempt < 3 {

@@ -170,10 +170,12 @@ func TestRedactSecrets(t *testing.T) {
 }
 
 func TestRejectPrivateHost(t *testing.T) {
-	if rejectPrivateHost("127.0.0.1") == nil {
+	dialer := newPublicTransport()
+	defer dialer.CloseIdleConnections()
+	if _, err := dialer.DialContext(context.Background(), "tcp", "127.0.0.1:80"); err == nil {
 		t.Fatal("loopback host was accepted")
 	}
-	if rejectPrivateHost("192.168.1.10") == nil {
+	if _, err := dialer.DialContext(context.Background(), "tcp", "192.168.1.10:80"); err == nil {
 		t.Fatal("private host was accepted")
 	}
 }
