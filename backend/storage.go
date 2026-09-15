@@ -142,8 +142,11 @@ func (storage *FilesystemStorage) Search(ctx context.Context, options FileSearch
 	if len(roots) == 0 {
 		return nil, errNoAuthorizedRoot
 	}
-	if options.MaxResults <= 0 || options.MaxResults > defaultSearchLimit {
+	if options.MaxResults <= 0 {
 		options.MaxResults = defaultSearchLimit
+	}
+	if options.MaxResults > maxScannedEntries {
+		options.MaxResults = maxScannedEntries
 	}
 	for i := range options.Extensions {
 		options.Extensions[i] = normalizeExtension(options.Extensions[i])

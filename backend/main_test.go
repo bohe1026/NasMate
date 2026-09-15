@@ -494,6 +494,25 @@ func TestIndexRebuildReportsCancellation(t *testing.T) {
 	}
 }
 
+func TestIndexRebuildCanPersistMoreThanDefaultSearchPage(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 1001; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("file-%04d.txt", i)), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dataDir := filepath.Join(root, "data")
+	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: dataDir})
+	res := request(t, server, http.MethodPost, "/api/index/rebuild", "")
+	if res.Code != http.StatusCreated {
+		t.Fatalf("index rebuild failed: %d %s", res.Code, res.Body.String())
+	}
+	status := request(t, server, http.MethodGet, "/api/index/status", "")
+	if !strings.Contains(status.Body.String(), `"itemCount":1001`) {
+		t.Fatalf("index was silently limited to default page: %s", status.Body.String())
+	}
+}
+
 func TestIndexSearchPaginatesAuthorizedMatches(t *testing.T) {
 	root := t.TempDir()
 	items := make([]FileMetadata, 0, 105)
