@@ -758,7 +758,25 @@ func (s *Server) handleIndexRebuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data, err := json.Marshal(map[string]any{"mode": "metadata-only", "generatedAt": time.Now().UTC(), "items": items})
-	if err != nil || os.WriteFile(path, data, 0600) != nil {
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "无法保存索引")
+		return
+	}
+	tmp, err := os.CreateTemp(s.config.DataDir, ".metadata-index-*.tmp")
+	if err == nil {
+		tmpName := tmp.Name()
+		defer os.Remove(tmpName)
+		if err = tmp.Chmod(0600); err == nil {
+			_, err = tmp.Write(data)
+		}
+		if closeErr := tmp.Close(); err == nil {
+			err = closeErr
+		}
+		if err == nil {
+			err = os.Rename(tmpName, path)
+		}
+	}
+	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "无法保存索引")
 		return
 	}

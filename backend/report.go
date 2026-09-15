@@ -125,7 +125,24 @@ func (s *Server) persistHealthReport(report HealthReport) error {
 		return err
 	}
 	path := filepath.Join(s.config.DataDir, fmt.Sprintf("health-report-%s.json", report.GeneratedAt.Format("20060102-150405")))
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	tmp, err := os.CreateTemp(s.config.DataDir, ".health-report-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
 		return err
 	}
 	return s.pruneHealthReports(30)
