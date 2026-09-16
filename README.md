@@ -91,6 +91,8 @@ ugcli pack --build 2 --arch all --product-series nasync
 - `GET /api/models/status`
 - `GET /api/index/status`
 - `POST /api/index/rebuild`
+- `GET /api/index/rebuild/{id}`
+- `POST /api/index/rebuild/{id}/cancel`
 - `GET /api/index/search`
 - `GET /api/artifacts`
 - `GET /api/artifacts/{name}`

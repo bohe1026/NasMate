@@ -160,6 +160,19 @@ type Task struct {
 	ParentTaskID string    `json:"parentTaskId,omitempty"`
 }
 
+type IndexRebuild struct {
+	ID             string     `json:"id"`
+	Status         string     `json:"status"`
+	ScannedEntries int        `json:"scannedEntries"`
+	IndexedItems   int        `json:"indexedItems"`
+	ErrorCode      string     `json:"errorCode,omitempty"`
+	Summary        string     `json:"summary"`
+	StartedAt      time.Time  `json:"startedAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+	CompletedAt    *time.Time `json:"completedAt,omitempty"`
+	User           User       `json:"user"`
+}
+
 type FileMetadata struct {
 	Name       string    `json:"name"`
 	Path       string    `json:"path"`
@@ -271,24 +284,27 @@ type FileSearchOptions struct {
 	MinSizeBytes   *int64
 	MaxSizeBytes   *int64
 	MaxResults     int
+	Progress       func(scannedEntries, indexedItems int)
 }
 
 type Store struct {
-	mu        sync.RWMutex
-	tasks     map[string]*Task
-	events    map[string][]Event
-	downloads map[string]*DownloadPlan
-	sequence  int64
-	sink      *EventSink
-	statePath string
-	persistMu sync.Mutex
+	mu            sync.RWMutex
+	tasks         map[string]*Task
+	events        map[string][]Event
+	downloads     map[string]*DownloadPlan
+	indexRebuilds map[string]*IndexRebuild
+	sequence      int64
+	sink          *EventSink
+	statePath     string
+	persistMu     sync.Mutex
 }
 
 type storeSnapshot struct {
-	Tasks     map[string]*Task         `json:"tasks"`
-	Events    map[string][]Event       `json:"events"`
-	Downloads map[string]*DownloadPlan `json:"downloads"`
-	Sequence  int64                    `json:"sequence"`
+	Tasks         map[string]*Task         `json:"tasks"`
+	Events        map[string][]Event       `json:"events"`
+	Downloads     map[string]*DownloadPlan `json:"downloads"`
+	IndexRebuilds map[string]*IndexRebuild `json:"indexRebuilds,omitempty"`
+	Sequence      int64                    `json:"sequence"`
 }
 
 type EventSink struct {
@@ -331,11 +347,12 @@ func NewStore(eventLogPath string) *Store {
 
 func NewStoreWithState(statePath, eventLogPath string) *Store {
 	store := &Store{
-		tasks:     make(map[string]*Task),
-		events:    make(map[string][]Event),
-		downloads: make(map[string]*DownloadPlan),
-		sink:      NewEventSink(eventLogPath),
-		statePath: statePath,
+		tasks:         make(map[string]*Task),
+		events:        make(map[string][]Event),
+		downloads:     make(map[string]*DownloadPlan),
+		indexRebuilds: make(map[string]*IndexRebuild),
+		sink:          NewEventSink(eventLogPath),
+		statePath:     statePath,
 	}
 	store.load()
 	store.reconcileInterruptedRuns()
@@ -360,6 +377,17 @@ func (s *Store) reconcileInterruptedRuns() {
 			interrupted = append(interrupted, id)
 		}
 	}
+	for id, rebuild := range s.indexRebuilds {
+		if rebuild.Status == statusRunning || rebuild.Status == statusPlanning {
+			rebuild.Status = statusFailed
+			rebuild.ErrorCode = "TASK_INTERRUPTED"
+			rebuild.Summary = "服务重启中断，索引未替换；请重新发起重建"
+			rebuild.UpdatedAt = time.Now().UTC()
+			completedAt := rebuild.UpdatedAt
+			rebuild.CompletedAt = &completedAt
+			interrupted = append(interrupted, id)
+		}
+	}
 	s.mu.Unlock()
 	for _, id := range interrupted {
 		s.appendEvent(id, "session.failed", map[string]string{"code": "TASK_INTERRUPTED", "summary": "服务重启中断，未自动继续执行"})
@@ -381,7 +409,7 @@ func (s *Store) appendEvent(sessionID, eventType string, data any) Event {
 }
 
 // StopBackgroundWork cancels all in-flight work before the HTTP server exits.
-// Persisted tasks are marked cancelled so a restart never needs to infer a
+// Persisted work is marked terminal so a restart never needs to infer a
 // shutdown as an unfinished execution.
 func (s *Server) StopBackgroundWork() {
 	s.stopping.Store(true)
@@ -397,10 +425,19 @@ func (s *Server) StopBackgroundWork() {
 		downloadCancels[id] = cancel
 	}
 	s.downloadMu.Unlock()
+	s.indexMu.Lock()
+	indexCancels := make(map[string]context.CancelFunc, len(s.indexCtx))
+	for id, cancel := range s.indexCtx {
+		indexCancels[id] = cancel
+	}
+	s.indexMu.Unlock()
 	for _, cancel := range taskCancels {
 		cancel()
 	}
 	for _, cancel := range downloadCancels {
+		cancel()
+	}
+	for _, cancel := range indexCancels {
 		cancel()
 	}
 	done := make(chan struct{})
@@ -412,6 +449,7 @@ func (s *Server) StopBackgroundWork() {
 	}
 	changedTasks := make([]string, 0, len(taskCancels))
 	changedDownloads := make([]string, 0, len(downloadCancels))
+	changedIndexes := make([]string, 0, len(indexCancels))
 	s.store.mu.Lock()
 	for id := range taskCancels {
 		if task, ok := s.store.tasks[id]; ok && (task.Status == statusPlanning || task.Status == statusRunning) {
@@ -428,8 +466,19 @@ func (s *Server) StopBackgroundWork() {
 			changedDownloads = append(changedDownloads, id)
 		}
 	}
+	for id := range indexCancels {
+		if rebuild, ok := s.store.indexRebuilds[id]; ok && (rebuild.Status == statusPlanning || rebuild.Status == statusRunning) {
+			rebuild.Status = statusFailed
+			rebuild.ErrorCode = "TASK_INTERRUPTED"
+			rebuild.Summary = "服务关闭，索引重建已中断；可重新发起"
+			rebuild.UpdatedAt = time.Now().UTC()
+			completedAt := rebuild.UpdatedAt
+			rebuild.CompletedAt = &completedAt
+			changedIndexes = append(changedIndexes, id)
+		}
+	}
 	s.store.mu.Unlock()
-	if len(changedTasks) == 0 && len(changedDownloads) == 0 {
+	if len(changedTasks) == 0 && len(changedDownloads) == 0 && len(changedIndexes) == 0 {
 		return
 	}
 	s.store.persist()
@@ -438,6 +487,9 @@ func (s *Server) StopBackgroundWork() {
 	}
 	for _, id := range changedDownloads {
 		s.store.appendEvent(id, "task.cancelled", map[string]string{"reason": "service_shutdown", "kind": "download"})
+	}
+	for _, id := range changedIndexes {
+		s.store.appendEvent(id, "session.failed", map[string]string{"reason": "service_shutdown", "kind": "index", "code": "TASK_INTERRUPTED"})
 	}
 }
 
@@ -467,6 +519,9 @@ func (s *Store) load() {
 	if snapshot.Downloads != nil {
 		s.downloads = snapshot.Downloads
 	}
+	if snapshot.IndexRebuilds != nil {
+		s.indexRebuilds = snapshot.IndexRebuilds
+	}
 	s.sequence = snapshot.Sequence
 }
 
@@ -478,10 +533,11 @@ func (s *Store) persist() {
 	defer s.persistMu.Unlock()
 	s.mu.RLock()
 	snapshot := storeSnapshot{
-		Tasks:     s.tasks,
-		Events:    s.events,
-		Downloads: s.downloads,
-		Sequence:  s.sequence,
+		Tasks:         s.tasks,
+		Events:        s.events,
+		Downloads:     s.downloads,
+		IndexRebuilds: s.indexRebuilds,
+		Sequence:      s.sequence,
 	}
 	data, err := json.Marshal(snapshot)
 	s.mu.RUnlock()
@@ -611,6 +667,8 @@ type Server struct {
 	tasksCtx        map[string]context.CancelFunc
 	workers         sync.WaitGroup
 	stopping        atomic.Bool
+	indexMu         sync.Mutex
+	indexCtx        map[string]context.CancelFunc
 	downloadMu      sync.Mutex
 	downloadsCtx    map[string]context.CancelFunc
 	rateMu          sync.Mutex
@@ -630,7 +688,7 @@ func NewServer(config Config) *Server {
 		docker = MockDocker{}
 		backup = MockBackup{}
 	}
-	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness(), tasksCtx: make(map[string]context.CancelFunc), downloadsCtx: make(map[string]context.CancelFunc), rateBuckets: make(map[string]rateBucket), sourceTransport: newPublicTransport()}
+	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness(), tasksCtx: make(map[string]context.CancelFunc), indexCtx: make(map[string]context.CancelFunc), downloadsCtx: make(map[string]context.CancelFunc), rateBuckets: make(map[string]rateBucket), sourceTransport: newPublicTransport()}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -672,6 +730,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleIndexStatus(w, r)
 	case path == "api/index/rebuild":
 		s.handleIndexRebuild(w, r)
+	case strings.HasPrefix(path, "api/index/rebuild/"):
+		s.handleIndexRebuildTask(w, r, strings.TrimPrefix(path, "api/index/rebuild/"))
 	case path == "api/index/search":
 		s.handleIndexSearch(w, r)
 	case path == "api/organize/dry-run":
@@ -770,44 +830,229 @@ func (s *Server) handleIndexRebuild(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "应用数据目录不可用")
 		return
 	}
-	items, err := s.storage.Search(r.Context(), FileSearchOptions{MaxResults: 100000})
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || r.Context().Err() != nil {
-		writeError(w, http.StatusRequestTimeout, "USER_CANCELLED", "索引重建已取消")
+	if s.stopping.Load() {
+		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "应用正在关闭，暂不能重建索引")
 		return
 	}
-	if err != nil && !errors.Is(err, errSearchLimit) {
-		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "暂时无法读取文件元数据")
+	user, _ := s.userFromRequest(r)
+	s.indexMu.Lock()
+	if len(s.indexCtx) >= 1 {
+		s.indexMu.Unlock()
+		writeError(w, http.StatusTooManyRequests, "RATE_LIMITED", "已有索引重建任务运行，请稍后重试")
 		return
 	}
-	path := filepath.Join(s.config.DataDir, "metadata-index.json")
+	id := newID("index")
+	now := time.Now().UTC()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	s.indexCtx[id] = cancel
+	s.workers.Add(1)
+	s.indexMu.Unlock()
+	job := &IndexRebuild{ID: id, Status: statusPlanning, Summary: "等待开始索引扫描", StartedAt: now, UpdatedAt: now, User: user}
+	s.store.mu.Lock()
+	s.store.indexRebuilds[id] = job
+	responseJob := *job
+	s.store.mu.Unlock()
+	s.store.persist()
+	s.store.appendEvent(id, "session.created", map[string]string{"userId": user.ID, "kind": "index"})
+	go s.runIndexRebuild(ctx, id)
+	writeJSON(w, http.StatusAccepted, responseJob)
+}
+
+func (s *Server) runIndexRebuild(ctx context.Context, id string) {
+	defer s.workers.Done()
+	defer func() {
+		s.indexMu.Lock()
+		delete(s.indexCtx, id)
+		s.indexMu.Unlock()
+	}()
+	s.updateIndexRebuildProgress(id, 0, 0, true)
+	items, err := s.storage.Search(ctx, FileSearchOptions{
+		MaxResults: maxScannedEntries,
+		Progress: func(scannedEntries, indexedItems int) {
+			s.updateIndexRebuildProgress(id, scannedEntries, indexedItems, false)
+		},
+	})
+	if err != nil {
+		if s.stopping.Load() {
+			return
+		}
+		s.store.mu.RLock()
+		cancelled := false
+		if job := s.store.indexRebuilds[id]; job != nil {
+			cancelled = job.Status == statusCancelled
+		}
+		s.store.mu.RUnlock()
+		if cancelled {
+			return
+		}
+		code, summary := "NAS_OFFLINE", "暂时无法读取文件元数据"
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			code, summary = "USER_CANCELLED", "索引重建已取消"
+		} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			code, summary = "TOOL_TIMEOUT", "索引重建超时，请稍后重试"
+		} else if errors.Is(err, errSearchLimit) {
+			code, summary = "VALIDATION_FAILED", "文件数量超过单次索引上限"
+		}
+		s.finishIndexRebuild(id, statusFailed, code, summary)
+		return
+	}
+
+	// Serialize the commit with cancellation. A cancelled job must never
+	// replace the previously published index.
+	s.indexMu.Lock()
+	s.store.mu.RLock()
+	active := false
+	if job := s.store.indexRebuilds[id]; job != nil {
+		active = job.Status == statusPlanning || job.Status == statusRunning
+	}
+	s.store.mu.RUnlock()
+	if !active || ctx.Err() != nil {
+		s.indexMu.Unlock()
+		return
+	}
+	if err := s.writeMetadataIndex(items); err != nil {
+		s.indexMu.Unlock()
+		s.finishIndexRebuild(id, statusFailed, "NAS_OFFLINE", "无法保存索引")
+		return
+	}
+	s.indexMu.Unlock()
+	s.finishIndexRebuild(id, statusCompleted, "", "元数据索引已重建")
+}
+
+func (s *Server) updateIndexRebuildProgress(id string, scannedEntries, indexedItems int, force bool) {
+	shouldPersist := force || scannedEntries > 0 && scannedEntries%100 == 0
+	s.store.mu.Lock()
+	job, ok := s.store.indexRebuilds[id]
+	if !ok || (job.Status != statusPlanning && job.Status != statusRunning) {
+		s.store.mu.Unlock()
+		return
+	}
+	if job.Status == statusPlanning {
+		job.Status = statusRunning
+	}
+	job.ScannedEntries = scannedEntries
+	job.IndexedItems = indexedItems
+	job.Summary = "正在扫描授权目录"
+	job.UpdatedAt = time.Now().UTC()
+	s.store.mu.Unlock()
+	if shouldPersist {
+		s.store.persist()
+		s.store.appendEvent(id, "task.progress", map[string]any{"kind": "index", "scannedEntries": scannedEntries, "indexedItems": indexedItems})
+	}
+}
+
+func (s *Server) finishIndexRebuild(id, status, errorCode, summary string) {
+	now := time.Now().UTC()
+	s.store.mu.Lock()
+	job, ok := s.store.indexRebuilds[id]
+	if !ok || (job.Status != statusPlanning && job.Status != statusRunning) {
+		s.store.mu.Unlock()
+		return
+	}
+	job.Status = status
+	job.ErrorCode = errorCode
+	job.Summary = summary
+	job.UpdatedAt = now
+	completedAt := now
+	job.CompletedAt = &completedAt
+	s.store.mu.Unlock()
+	s.store.persist()
+	if status == statusCompleted {
+		s.store.appendEvent(id, "session.completed", map[string]any{"kind": "index", "summary": summary})
+	} else {
+		s.store.appendEvent(id, "session.failed", map[string]any{"kind": "index", "code": errorCode, "summary": summary})
+	}
+}
+
+func (s *Server) writeMetadataIndex(items []FileMetadata) error {
 	if err := os.MkdirAll(s.config.DataDir, 0700); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "无法保存索引")
-		return
+		return err
 	}
 	data, err := json.Marshal(map[string]any{"mode": "metadata-only", "generatedAt": time.Now().UTC(), "items": items})
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "无法保存索引")
-		return
+		return err
 	}
 	tmp, err := os.CreateTemp(s.config.DataDir, ".metadata-index-*.tmp")
-	if err == nil {
-		tmpName := tmp.Name()
-		defer os.Remove(tmpName)
-		if err = tmp.Chmod(0600); err == nil {
-			_, err = tmp.Write(data)
-		}
-		if closeErr := tmp.Close(); err == nil {
-			err = closeErr
-		}
-		if err == nil {
-			err = os.Rename(tmpName, path)
-		}
-	}
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "NAS_OFFLINE", "无法保存索引")
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, filepath.Join(s.config.DataDir, "metadata-index.json"))
+}
+
+func (s *Server) handleIndexRebuildTask(w http.ResponseWriter, r *http.Request, path string) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 1 || parts[0] == "" || len(parts) > 2 || (len(parts) == 2 && parts[1] != "cancel") {
+		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "索引任务不存在")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"status": "success", "summary": "元数据索引已重建", "artifact": path, "itemCount": len(items), "readOnly": true})
+	user, _ := s.userFromRequest(r)
+	id := parts[0]
+	s.store.mu.RLock()
+	job, ok := s.store.indexRebuilds[id]
+	if ok && job.User.ID == user.ID {
+		copyJob := *job
+		if r.Method == http.MethodGet && len(parts) == 1 {
+			s.store.mu.RUnlock()
+			writeJSON(w, http.StatusOK, copyJob)
+			return
+		}
+	} else {
+		ok = false
+	}
+	s.store.mu.RUnlock()
+	if !ok {
+		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "索引任务不存在")
+		return
+	}
+	if r.Method != http.MethodPost || len(parts) != 2 {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+		return
+	}
+	s.indexMu.Lock()
+	cancel := s.indexCtx[id]
+	s.store.mu.Lock()
+	job = s.store.indexRebuilds[id]
+	if job == nil || job.User.ID != user.ID {
+		s.store.mu.Unlock()
+		s.indexMu.Unlock()
+		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "索引任务不存在")
+		return
+	}
+	if job.Status != statusPlanning && job.Status != statusRunning {
+		copyJob := *job
+		s.store.mu.Unlock()
+		s.indexMu.Unlock()
+		writeJSON(w, http.StatusConflict, copyJob)
+		return
+	}
+	now := time.Now().UTC()
+	job.Status = statusCancelled
+	job.ErrorCode = "USER_CANCELLED"
+	job.Summary = "索引重建已取消，旧索引保持不变"
+	job.UpdatedAt = now
+	job.CompletedAt = &now
+	copyJob := *job
+	s.store.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	s.indexMu.Unlock()
+	s.store.persist()
+	s.store.appendEvent(id, "approval.denied", map[string]any{"kind": "index", "code": "USER_CANCELLED"})
+	writeJSON(w, http.StatusOK, copyJob)
 }
 
 func (s *Server) handleIndexSearch(w http.ResponseWriter, r *http.Request) {

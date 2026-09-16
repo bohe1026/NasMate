@@ -587,7 +587,9 @@ type blockingIndexStorage struct {
 	started chan struct{}
 }
 
-func (storage blockingIndexStorage) Usage(context.Context) (StorageUsage, error) { return StorageUsage{}, nil }
+func (storage blockingIndexStorage) Usage(context.Context) (StorageUsage, error) {
+	return StorageUsage{}, nil
+}
 
 func (storage blockingIndexStorage) Search(ctx context.Context, _ FileSearchOptions) ([]FileMetadata, error) {
 	close(storage.started)
@@ -657,7 +659,7 @@ type cancelledIndexStorage struct{}
 
 func (cancelledIndexStorage) Usage(context.Context) (StorageUsage, error) { return StorageUsage{}, nil }
 func (cancelledIndexStorage) Search(ctx context.Context, _ FileSearchOptions) ([]FileMetadata, error) {
-	return nil, ctx.Err()
+	return nil, context.Canceled
 }
 
 func TestIndexRebuildReportsCancellation(t *testing.T) {

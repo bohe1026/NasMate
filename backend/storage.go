@@ -167,6 +167,9 @@ func (storage *FilesystemStorage) Search(ctx context.Context, options FileSearch
 				return err
 			}
 			scanned++
+			if options.Progress != nil && (scanned == 1 || scanned%25 == 0) {
+				options.Progress(scanned, len(items))
+			}
 			if scanned > maxScannedEntries {
 				return errSearchLimit
 			}
@@ -201,6 +204,9 @@ func (storage *FilesystemStorage) Search(ctx context.Context, options FileSearch
 			}
 			return nil, walkErr
 		}
+	}
+	if options.Progress != nil {
+		options.Progress(scanned, len(items))
 	}
 	return items, nil
 }
