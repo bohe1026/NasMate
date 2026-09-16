@@ -886,6 +886,24 @@ func TestHealthSchedulerDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestLoadConfigReadsUGOSParametersForHealthInterval(t *testing.T) {
+	t.Setenv("HEALTH_INTERVAL", "24h")
+	t.Setenv("UGAPP_HEALTH_INTERVAL", "")
+	config := loadConfig()
+	if config.HealthInterval != 24*time.Hour {
+		t.Fatalf("expected HEALTH_INTERVAL parameter to configure scheduler, got %s", config.HealthInterval)
+	}
+}
+
+func TestLoadConfigRejectsInvalidHealthInterval(t *testing.T) {
+	t.Setenv("HEALTH_INTERVAL", "30s")
+	t.Setenv("UGAPP_HEALTH_INTERVAL", "24h")
+	config := loadConfig()
+	if config.HealthInterval != 0 {
+		t.Fatalf("invalid custom interval should disable scheduler, got %s", config.HealthInterval)
+	}
+}
+
 func TestDownloadExistingTargetIsRejected(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "photos")

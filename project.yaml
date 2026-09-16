@@ -19,6 +19,64 @@ tag_types:
 depend_fw_version: 1.13.0.0000
 allow_add_access_path: true
 only_admin: false
+permissions:
+  - NETWORK.ACCESS_INTERNET
+parameters:
+  - key: LLM_PROVIDER
+    type: string
+    required: false
+    changeable: true
+    i18n:
+      en-US:
+        name: Model provider
+        description: ollama, vllm, openai-compatible, or leave empty for DeepSeek compatibility.
+      zh-CN:
+        name: 模型提供商
+        description: 可填写 ollama、vllm、openai-compatible；留空使用 DeepSeek 兼容接口。
+  - key: LLM_BASE_URL
+    type: string
+    required: false
+    changeable: true
+    i18n:
+      en-US:
+        name: Model endpoint
+        description: OpenAI-compatible endpoint URL. Local endpoints are preferred for private data.
+      zh-CN:
+        name: 模型地址
+        description: OpenAI 兼容接口地址；涉及私密数据时建议使用本地模型地址。
+  - key: LLM_MODEL
+    type: string
+    required: false
+    changeable: true
+    i18n:
+      en-US:
+        name: Model name
+        description: Model identifier used by the selected provider.
+      zh-CN:
+        name: 模型名称
+        description: 当前模型提供商使用的模型标识。
+  - key: LLM_API_KEY
+    type: password
+    required: false
+    changeable: true
+    i18n:
+      en-US:
+        name: Model API key
+        description: Stored by UGOS as a password and never included in task logs.
+      zh-CN:
+        name: 模型 API Key
+        description: 由 UGOS 按密码保存，永不写入任务日志。
+  - key: HEALTH_INTERVAL
+    type: string
+    required: false
+    changeable: true
+    i18n:
+      en-US:
+        name: Health report interval
+        description: Optional Go duration such as 24h; values below one minute are ignored.
+      zh-CN:
+        name: 健康日报间隔
+        description: 可选 Go 时长，例如 24h；小于 1 分钟的值会被忽略。
 i18n:
   en-US:
     name: NasMate

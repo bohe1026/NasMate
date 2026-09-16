@@ -113,20 +113,23 @@ func loadConfig() Config {
 		StatePath:      statePath,
 		MaxBodyBytes:   1 << 20,
 		AllowedOrigin:  allowedOrigin,
-		HealthInterval: parseDurationEnv("UGAPP_HEALTH_INTERVAL"),
+		HealthInterval: parseDurationEnv("HEALTH_INTERVAL", "UGAPP_HEALTH_INTERVAL"),
 	}
 }
 
-func parseDurationEnv(key string) time.Duration {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return 0
+func parseDurationEnv(keys ...string) time.Duration {
+	for _, key := range keys {
+		value := strings.TrimSpace(os.Getenv(key))
+		if value == "" {
+			continue
+		}
+		duration, err := time.ParseDuration(value)
+		if err != nil || duration < time.Minute {
+			return 0
+		}
+		return duration
 	}
-	duration, err := time.ParseDuration(value)
-	if err != nil || duration < time.Minute {
-		return 0
-	}
-	return duration
+	return 0
 }
 
 func envOr(key, fallback string) string {

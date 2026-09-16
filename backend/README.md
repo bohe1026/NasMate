@@ -15,6 +15,8 @@ Persistent task, download, and session state is stored below `UGAPP_DATA_DIR` (`
 
 `UGAPP_HEALTH_INTERVAL` 可选配置定时健康报告，例如 `24h`；未设置时调度器关闭，最小有效间隔为 1 分钟。健康报告最多保留 30 份，旧报告按时间自动清理。
 
+正式 UGOS 安装通过 `project.yaml` 的应用配置页面设置 `HEALTH_INTERVAL`、`LLM_PROVIDER`、`LLM_BASE_URL`、`LLM_MODEL` 和 `LLM_API_KEY`。其中 `LLM_API_KEY` 声明为密码类型；为兼容本地开发，仍接受 `UGAPP_HEALTH_INTERVAL`。应用只声明 `NETWORK.ACCESS_INTERNET`，不声明系统命令执行权限。
+
 健康报告只使用上一份有效的本地报告快照计算正增长目录，不读取文件正文；没有基线时不展示增长。交互式报告的失败任务、失败下载数量只统计当前 UGOS 用户。由于结果文件目前保存在应用级数据目录，持久化报告会省略用户级计数；没有用户身份的定时报告也不聚合这些私人状态。
 
 任务创建立即返回 `规划中`，规划与只读工具在受限的后台任务上下文中运行；用户取消会中断模型请求，服务重启不会自动重放遗留的规划或下载。配置 `DEEPSEEK_API_KEY` 后，云端规划器只接收本地分类的工具意图及允许工具，而不接收用户请求原文、NAS 路径或文件内容；模型输入、模型成功结果或脱敏的本地降级原因、最终工具计划分别记入追加式轨迹。包含明显凭据赋值或 Bearer Token 的任务请求在持久化前被拒绝。
