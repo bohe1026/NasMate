@@ -54,7 +54,26 @@ rootfs_amd64/bin/ugreen-ai-backend # Linux amd64
 rootfs_arm64/bin/ugreen-ai-backend # Linux arm64
 ```
 
-根目录 `project.yaml` 已配置 `start_cmd: bin/ugreen-ai-backend`、`port: 21010`、`proxy_path: api` 和 `open_type: inner`。正式 `upk` 打包应在 Debian 12/Linux 上使用 `ugcli check` 和 `ugcli pack`，以保留可执行文件权限并符合 UGOS 校验流程。开发者授权 NAS、`ugcli` 和隐私/源码链接仍是上架前置条件。
+根目录 `project.yaml` 已配置 `start_cmd: bin/ugreen-ai-backend`、`port: 21010`、`proxy_path: api` 和 `open_type: inner`。正式 `upk` 打包应在 Debian 12/Linux 上使用 `ugcli check` 和 `ugcli pack`，以保留可执行文件权限并符合 UGOS 校验流程。当前已使用官方 `ugcli v1.1.0.25` 在 Debian 12 容器中完成检查和打包验证：
+
+```bash
+# 在项目根目录执行
+ugcli check
+ugcli pack --build 2 --arch all --product-series nasync
+```
+
+输出位于 `build_dir/pkgs/upk/`，分别对应 `amd64_nasync_*.upk` 和 `arm64_nasync_*.upk`。构建号必须在同一 `x.y.z` 版本内递增，不能重复；正式包应在 Linux 环境中生成。
+
+## UGOS 开发授权与设备安装
+
+绿联开发者授权文件不能放入仓库，也不是本地打包密钥。按照官方“开发准备”文档操作：
+
+1. 将官方发来的授权文件重命名为 `ugdev.sig`。
+2. 把 `ugdev.sig` 上传到目标 UGOS NAS 的管理员用户个人文件夹。
+3. 在该设备的应用中心选择“手动安装”，上传与产品线匹配的 `.upk`：nasync NAS 使用 `nasync` 包，不能安装 HomeAgent 包。
+4. 安装后从应用中心或桌面打开 NasMate，检查应用启动、端口探测、UGOS 登录请求头和授权目录访问。
+
+本地只负责生成和校验 `.upk`；是否能在设备上安装、启动和访问真实 Docker/备份能力，必须以目标 NAS 的 UGOS 版本和官方授权结果为准。
 
 ## 后端 API
 
