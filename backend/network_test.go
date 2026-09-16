@@ -147,6 +147,52 @@ func TestProbeBlockedSourcesReturnSafeErrors(t *testing.T) {
 	}
 }
 
+func TestSearchPublicSourcesFlattensResultsAndDropsPrivateURLs(t *testing.T) {
+	server := testServer()
+	server.searchEndpoint = "https://search.example.test/"
+	server.sourceTransport = sourceRoundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.Query().Get("q") != "nature photos" || r.URL.Query().Get("format") != "json" {
+			t.Fatalf("unexpected search request: %s", r.URL.String())
+		}
+		body := `{"Heading":"Nature","RelatedTopics":[{"Text":"Public image - example","FirstURL":"https://example.com/image.jpg"},{"Text":"Private service","FirstURL":"http://127.0.0.1/admin"},{"Topics":[{"Text":"Nested PDF","FirstURL":"https://example.com/doc.pdf"}]}]}`
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})
+	res := request(t, server, http.MethodPost, "/api/network/sources/search", `{"query":"nature photos","limit":10}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("search failed: %d %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Items []NetworkSearchResult `json:"items"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Items) != 2 || body.Items[0].URL != "https://example.com/image.jpg" || body.Items[1].URL != "https://example.com/doc.pdf" {
+		t.Fatalf("unexpected safe search results: %+v", body.Items)
+	}
+	if strings.Contains(res.Body.String(), "127.0.0.1") {
+		t.Fatal("private search result was returned")
+	}
+}
+
+func TestSearchPublicSourcesValidatesQueryAndBoundsErrors(t *testing.T) {
+	server := testServer()
+	server.searchEndpoint = "https://search.example.test/"
+	for _, body := range []string{`{"query":""}`, `{"query":"token=secret"}`, `{"query":"valid","limit":21}`} {
+		res := request(t, server, http.MethodPost, "/api/network/sources/search", body)
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "VALIDATION_FAILED") {
+			t.Fatalf("invalid search accepted: %s -> %d %s", body, res.Code, res.Body.String())
+		}
+	}
+	server.sourceTransport = sourceRoundTripper(func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial internal search host: credential-details")
+	})
+	res := request(t, server, http.MethodPost, "/api/network/sources/search", `{"query":"valid"}`)
+	if res.Code != http.StatusBadGateway || !strings.Contains(res.Body.String(), "NETWORK_ERROR") || strings.Contains(res.Body.String(), "credential-details") {
+		t.Fatalf("search error was not bounded: %d %s", res.Code, res.Body.String())
+	}
+}
+
 func TestDownloadCannotRequestLoopback(t *testing.T) {
 	var hits atomic.Int32
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
