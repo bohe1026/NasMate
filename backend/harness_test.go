@@ -323,3 +323,15 @@ func TestVLLMModelProviderUsesLocalDefaults(t *testing.T) {
 		t.Fatalf("unexpected vLLM model status: %+v", status)
 	}
 }
+
+func TestNetworkSearchPromptUsesReadOnlyPublicSourceTool(t *testing.T) {
+	plan := NewHarness().Plan(context.Background(), "搜索网络素材 免版权自然风景")
+	if len(plan.Steps) != 1 || plan.Steps[0].Tool != "search_public_sources" {
+		t.Fatalf("expected public source search tool, got %+v", plan)
+	}
+	for _, tool := range NewHarness().Tools {
+		if tool.Name == "search_public_sources" && !tool.ReadOnly {
+			t.Fatal("public source search must be read-only")
+		}
+	}
+}
