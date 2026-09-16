@@ -293,3 +293,33 @@ func TestOpenAICompatiblePlanningRequestRecordsNoOriginalUserData(t *testing.T) 
 		t.Fatal("validated model result was not recorded")
 	}
 }
+
+func TestOllamaModelProviderIsConfigurableWithoutAPIKey(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_PROVIDER", "ollama")
+	t.Setenv("LLM_BASE_URL", "http://127.0.0.1:11434")
+	t.Setenv("LLM_MODEL", "llama3.2")
+	harness := NewHarness()
+	status := harness.ModelStatus()
+	if status.Provider != "Ollama" || status.Model != "llama3.2" || !status.Configured || status.Mode != "local" {
+		t.Fatalf("unexpected Ollama model status: %+v", status)
+	}
+	provider, ok := harness.model.(OpenAICompatibleProvider)
+	if !ok || provider.APIKey != "" || provider.BaseURL != "http://127.0.0.1:114114" {
+		t.Fatalf("unexpected Ollama provider: %+v", harness.model)
+	}
+}
+
+func TestVLLMModelProviderUsesLocalDefaults(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "")
+	t.Setenv("LLM_MODEL", "")
+	harness := NewHarness()
+	status := harness.ModelStatus()
+	if status.Provider != "vLLM" || status.Model != "local-model" || !status.Configured || status.Mode != "local" {
+		t.Fatalf("unexpected vLLM model status: %+v", status)
+	}
+}
