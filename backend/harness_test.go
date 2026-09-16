@@ -306,7 +306,7 @@ func TestOllamaModelProviderIsConfigurableWithoutAPIKey(t *testing.T) {
 		t.Fatalf("unexpected Ollama model status: %+v", status)
 	}
 	provider, ok := harness.model.(OpenAICompatibleProvider)
-	if !ok || provider.APIKey != "" || provider.BaseURL != "http://127.0.0.1:114114" {
+	if !ok || provider.APIKey != "" || provider.BaseURL != "http://127.0.0.1:11434" {
 		t.Fatalf("unexpected Ollama provider: %+v", harness.model)
 	}
 }

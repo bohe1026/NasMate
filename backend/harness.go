@@ -73,19 +73,39 @@ func NewHarness() *Harness {
 		{Name: "backup_status", Description: "读取备份状态和恢复有效性", ReadOnly: true},
 		{Name: "prepare_download", Description: "下载计划必须由独立接口校验来源和目标目录后创建，模型不能代替用户确认", ReadOnly: false},
 	}}
-	if key := os.Getenv("DEEPSEEK_API_KEY"); key != "" {
-		h.model = OpenAICompatibleProvider{BaseURL: envOr("LLM_BASE_URL", "https://api.deepseek.com"), APIKey: key, Model: envOr("LLM_MODEL", "deepseek-chat")}
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER")))
+	key := envOr("LLM_API_KEY", os.Getenv("DEEPSEEK_API_KEY"))
+	switch provider {
+	case "ollama":
+		h.model = OpenAICompatibleProvider{Name: "Ollama", Mode: "local", BaseURL: envOr("LLM_BASE_URL", "http://127.0.0.1:11434"), Model: envOr("LLM_MODEL", "llama3.2")}
+	case "vllm":
+		h.model = OpenAICompatibleProvider{Name: "vLLM", Mode: "local", BaseURL: envOr("LLM_BASE_URL", "http://127.0.0.1:8000"), Model: envOr("LLM_MODEL", "local-model")}
+	case "openai-compatible":
+		if key != "" {
+			h.model = OpenAICompatibleProvider{Name: "OpenAI-compatible", BaseURL: envOr("LLM_BASE_URL", "https://api.openai.com"), APIKey: key, Model: envOr("LLM_MODEL", "gpt-4o-mini")}
+		}
+	default:
+		if key != "" {
+			h.model = OpenAICompatibleProvider{Name: "DeepSeek", BaseURL: envOr("LLM_BASE_URL", "https://api.deepseek.com"), APIKey: key, Model: envOr("LLM_MODEL", "deepseek-chat")}
+		}
 	}
 	return h
 }
 
 func (h *Harness) ModelStatus() ModelStatus {
 	if provider, ok := h.model.(OpenAICompatibleProvider); ok {
-		name := "OpenAI-compatible"
-		if strings.Contains(strings.ToLower(provider.BaseURL), "deepseek") {
-			name = "DeepSeek"
+		name := provider.Name
+		if name == "" {
+			name = "OpenAI-compatible"
+			if strings.Contains(strings.ToLower(provider.BaseURL), "deepseek") {
+				name = "DeepSeek"
+			}
 		}
-		return ModelStatus{Provider: name, Model: provider.Model, Configured: provider.APIKey != "", Mode: "cloud"}
+		mode := provider.Mode
+		if mode == "" {
+			mode = "cloud"
+		}
+		return ModelStatus{Provider: name, Model: provider.Model, Configured: provider.APIKey != "" || mode == "local", Mode: mode}
 	}
 	return ModelStatus{Provider: "规则规划器", Model: "builtin-policy", Configured: true, Mode: "local"}
 }
@@ -156,7 +176,13 @@ func validPlan(plan AgentPlan, tools []ToolSpec) bool {
 	return true
 }
 
-type OpenAICompatibleProvider struct{ BaseURL, APIKey, Model string }
+type OpenAICompatibleProvider struct {
+	Name    string
+	Mode    string
+	BaseURL string
+	APIKey  string
+	Model   string
+}
 
 func planningSystemPrompt(tools []ToolSpec) string {
 	schema := `{"status":"success","summary":"...","next_actions":["..."],"artifacts":[],"steps":[{"tool":"search_files","reason":"..."}]}`
@@ -175,7 +201,9 @@ func (p OpenAICompatibleProvider) Plan(ctx context.Context, prompt string, tools
 	if err != nil {
 		return AgentPlan{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+p.APIKey)
+	if p.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.APIKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)

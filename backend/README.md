@@ -19,6 +19,17 @@ Persistent task, download, and session state is stored below `UGAPP_DATA_DIR` (`
 
 任务创建立即返回 `规划中`，规划与只读工具在受限的后台任务上下文中运行；用户取消会中断模型请求，服务重启不会自动重放遗留的规划或下载。配置 `DEEPSEEK_API_KEY` 后，云端规划器只接收本地分类的工具意图及允许工具，而不接收用户请求原文、NAS 路径或文件内容；模型输入、模型成功结果或脱敏的本地降级原因、最终工具计划分别记入追加式轨迹。包含明显凭据赋值或 Bearer Token 的任务请求在持久化前被拒绝。
 
+模型适配器通过环境变量选择，默认不配置外部模型时使用本地规则规划器：
+
+```text
+LLM_PROVIDER=ollama              # ollama、vllm、openai-compatible；省略时按 DeepSeek 兼容接口处理
+LLM_BASE_URL=http://127.0.0.1:11434
+LLM_MODEL=llama3.2
+LLM_API_KEY=                     # Ollama/vLLM 本地端点可留空
+```
+
+`ollama` 默认端口为 `11434`，`vllm` 默认端口为 `8000`。云端 DeepSeek/OpenAI-compatible 适配器必须配置 API Key；`/api/models/status` 只返回提供商、模型、模式和布尔配置状态，不返回密钥。
+
 已结束任务可通过 `/api/tasks/{id}/resume` 人工继续，创建新会话并记录 `session.forked`；不会自动重放旧任务。
 
 同时最多运行 3 个规划或只读任务；达到上限时创建接口返回 `RATE_LIMITED`，不会生成任务或轨迹。取消或执行结束后释放名额。
