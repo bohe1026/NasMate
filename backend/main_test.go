@@ -31,10 +31,14 @@ func request(t *testing.T, server http.Handler, method, path, body string) *http
 }
 
 func requestAsUser(t *testing.T, server http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	return requestWithUser(t, server, "test-user", method, path, body)
+}
+
+func requestWithUser(t *testing.T, server http.Handler, userID, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Ugreen-User-ID", "test-user")
+	req.Header.Set("Ugreen-User-ID", userID)
 	req.Header.Set("Ugreen-User-Name", "测试用户")
 	req.Header.Set("Ugreen-User-Type", "admin")
 	res := httptest.NewRecorder()
@@ -490,6 +494,26 @@ func TestIndexStatusCountsOnlyAuthorizedItems(t *testing.T) {
 	res := request(t, server, http.MethodGet, "/api/index/status", "")
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"itemCount":1`) {
 		t.Fatalf("unauthorized index entries counted: %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestIndexStatusReturnsLatestRebuildForCurrentUserOnly(t *testing.T) {
+	server := testServer()
+	now := time.Now().UTC()
+	server.store.mu.Lock()
+	server.store.indexRebuilds["old"] = &IndexRebuild{ID: "old", Status: statusFailed, Summary: "旧任务", UpdatedAt: now.Add(-time.Minute), User: User{ID: "test-user"}}
+	server.store.indexRebuilds["current"] = &IndexRebuild{ID: "current", Status: statusRunning, Summary: "正在扫描授权目录", UpdatedAt: now, User: User{ID: "test-user"}}
+	server.store.indexRebuilds["private"] = &IndexRebuild{ID: "private", Status: statusRunning, Summary: "其他用户任务", UpdatedAt: now.Add(time.Minute), User: User{ID: "other-user"}}
+	server.store.mu.Unlock()
+
+	res := requestAsUser(t, server, http.MethodGet, "/api/index/status", "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"id":"current"`) || strings.Contains(res.Body.String(), "private") || strings.Contains(res.Body.String(), "old") {
+		t.Fatalf("index status leaked or selected wrong rebuild: %d %s", res.Code, res.Body.String())
+	}
+
+	res = requestWithUser(t, server, "other-user", http.MethodGet, "/api/index/status", "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"id":"private"`) || strings.Contains(res.Body.String(), "current") {
+		t.Fatalf("index status did not isolate users: %d %s", res.Code, res.Body.String())
 	}
 }
 

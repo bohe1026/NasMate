@@ -14,6 +14,7 @@ type IndexStatus = {
   requiresExplicitConsent?: boolean
   generatedAt?: string
   itemCount?: number
+  rebuild?: RebuildJob | null
 }
 
 type IndexedFile = {
@@ -61,8 +62,18 @@ export function KnowledgeIndexPanel() {
     return responseJSON<IndexStatus>(response)
   }
 
+  function applyStatus(data: IndexStatus) {
+    setStatus(data)
+    const job = data.rebuild ?? null
+    setRebuildJob(job)
+    if (job?.status === '规划中' || job?.status === '运行中') {
+      setRebuildState('loading')
+      setRebuildMessage('')
+    }
+  }
+
   useEffect(() => {
-    void readStatus().then((data) => { setStatus(data); setStatusState('ready') }).catch(() => setStatusState('error'))
+    void readStatus().then((data) => { applyStatus(data); setStatusState('ready') }).catch(() => setStatusState('error'))
   }, [])
 
   const rebuildID = rebuildJob?.id
@@ -78,7 +89,7 @@ export function KnowledgeIndexPanel() {
         if (data.status === '已完成' || data.status === '已取消' || data.status === '失败') {
           setRebuildState(data.status === '已完成' ? 'success' : 'error')
           setRebuildMessage(`${data.summary || '索引重建已结束'} · ${data.indexedItems ?? 0} 项`)
-          void readStatus().then(setStatus).catch(() => undefined)
+          void readStatus().then(applyStatus).catch(() => undefined)
         }
       }).catch(() => undefined)
     }, 500)
@@ -159,7 +170,7 @@ export function KnowledgeIndexPanel() {
   return <section className="readonly-panel knowledge-panel" aria-labelledby="knowledge-index-panel-title">
     <header className="readonly-panel-heading">
       <div><span className="readonly-icon blue"><Database size={18} /></span><div><h2 id="knowledge-index-panel-title">本地知识索引</h2><p>先从文件名和元数据开始，正文、图片和音视频需要单独授权。</p></div></div>
-      <button className="icon-button" aria-label="刷新索引状态" title="刷新索引状态" onClick={() => { setStatusState('loading'); void readStatus().then((data) => { setStatus(data); setStatusState('ready') }).catch(() => setStatusState('error')) }} disabled={statusState === 'loading'}><RefreshCw size={16} className={statusState === 'loading' ? 'spin' : undefined} /></button>
+      <button className="icon-button" aria-label="刷新索引状态" title="刷新索引状态" onClick={() => { setStatusState('loading'); void readStatus().then((data) => { applyStatus(data); setStatusState('ready') }).catch(() => setStatusState('error')) }} disabled={statusState === 'loading'}><RefreshCw size={16} className={statusState === 'loading' ? 'spin' : undefined} /></button>
     </header>
     {statusState === 'error' && <p className="readonly-error" role="alert">索引状态暂时无法读取，请检查应用连接后重试。</p>}
     {status && <div className="index-status-box"><div className="backup-title"><strong>{metadataOnly ? '元数据模式' : '索引状态待确认'}</strong><span className={`status-tag ${status.status === 'available' ? 'is-success' : 'is-warning'}`}>{status.status === 'available' ? '可用' : status.status === 'not_generated' ? '尚未生成' : status.status || '不可用'}</span></div><p>{status.roots?.length ? <>授权根目录：{status.roots.map((root) => <code className="index-root" key={root}>{root}</code>)}</> : '尚未发现授权根目录。'}</p>{status.status === 'available' && <p className="index-meta">{status.itemCount ?? 0} 项 · {formatDate(status.generatedAt)}</p>}<ul className="index-safety-list"><li>正文索引、OCR、音视频转写均已关闭</li><li>{status.requiresExplicitConsent ? '扩展索引需要真实用户单独授权' : '扩展索引授权状态待确认'}</li></ul></div>}

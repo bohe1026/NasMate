@@ -788,6 +788,17 @@ func (s *Server) handleIndexStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := "not_generated"
+	user, _ := s.userFromRequest(r)
+	var rebuild *IndexRebuild
+	s.store.mu.RLock()
+	for _, candidate := range s.store.indexRebuilds {
+		if candidate.User.ID != user.ID || (rebuild != nil && !candidate.UpdatedAt.After(rebuild.UpdatedAt)) {
+			continue
+		}
+		copyJob := *candidate
+		rebuild = &copyJob
+	}
+	s.store.mu.RUnlock()
 	var generatedAt time.Time
 	itemCount := 0
 	if s.config.DataDir != "" {
@@ -821,6 +832,7 @@ func (s *Server) handleIndexStatus(w http.ResponseWriter, r *http.Request) {
 		"ocrEnabled":                false,
 		"mediaTranscriptionEnabled": false,
 		"requiresExplicitConsent":   true,
+		"rebuild":                   rebuild,
 	})
 }
 
