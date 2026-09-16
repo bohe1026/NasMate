@@ -674,6 +674,7 @@ type Server struct {
 	rateMu          sync.Mutex
 	rateBuckets     map[string]rateBucket
 	sourceTransport http.RoundTripper
+	searchEndpoint  string
 }
 
 type rateBucket struct {
@@ -688,7 +689,7 @@ func NewServer(config Config) *Server {
 		docker = MockDocker{}
 		backup = MockBackup{}
 	}
-	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness(), tasksCtx: make(map[string]context.CancelFunc), indexCtx: make(map[string]context.CancelFunc), downloadsCtx: make(map[string]context.CancelFunc), rateBuckets: make(map[string]rateBucket), sourceTransport: newPublicTransport()}
+	return &Server{config: config, store: NewStoreWithState(config.StatePath, config.EventLogPath), storage: NewFilesystemStorage(config.SharedRoots), docker: docker, backup: backup, harness: NewHarness(), tasksCtx: make(map[string]context.CancelFunc), indexCtx: make(map[string]context.CancelFunc), downloadsCtx: make(map[string]context.CancelFunc), rateBuckets: make(map[string]rateBucket), sourceTransport: newPublicTransport(), searchEndpoint: "https://api.duckduckgo.com/"}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -710,7 +711,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if (r.URL.Path == "/api/files/search") || (r.URL.Path == "/api/tasks" && r.Method == http.MethodPost) {
 		limit = 20
 	}
-	if r.URL.Path == "/api/downloads/prepare" || r.URL.Path == "/api/network/sources/probe" {
+	if r.URL.Path == "/api/downloads/prepare" || r.URL.Path == "/api/network/sources/probe" || r.URL.Path == "/api/network/sources/search" {
 		limit = 10
 	}
 	if !s.allowRequest(user.ID, r.URL.Path, limit) {
@@ -762,6 +763,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleValidateSources(w, r)
 	case path == "api/network/sources/probe":
 		s.handleProbeSources(w, r)
+	case path == "api/network/sources/search":
+		s.handleSearchSources(w, r)
 	case path == "api/downloads":
 		s.handleDownloads(w, r)
 	case strings.HasPrefix(path, "api/downloads/"):
@@ -1396,6 +1399,12 @@ func (s *Server) executeReadOnlyTool(ctx context.Context, name, prompt string) (
 		return s.storage.Search(ctx, FileSearchOptions{Keyword: extractSearchKeyword(prompt), MaxResults: 100})
 	case "search_index":
 		return s.searchMetadataIndex(extractSearchKeyword(prompt))
+	case "search_public_sources":
+		query := extractNetworkSearchQuery(prompt)
+		if len([]rune(query)) < 2 || len([]rune(query)) > 200 || containsCredential(query) {
+			return nil, errInvalidInput
+		}
+		return s.searchPublicSources(ctx, query, 10)
 	default:
 		return nil, fmt.Errorf("unknown tool %q: %w", name, errInvalidInput)
 	}
@@ -1407,6 +1416,17 @@ func extractSearchKeyword(prompt string) string {
 		value = strings.TrimSpace(strings.TrimPrefix(value, prefix))
 	}
 	for _, suffix := range []string{"文件", "资料", "文档"} {
+		value = strings.TrimSpace(strings.TrimSuffix(value, suffix))
+	}
+	return value
+}
+
+func extractNetworkSearchQuery(prompt string) string {
+	value := strings.TrimSpace(prompt)
+	for _, prefix := range []string{"搜索网络素材", "搜索公开来源", "搜索网络", "检索公开来源", "检索网络", "查找素材", "搜索"} {
+		value = strings.TrimSpace(strings.TrimPrefix(value, prefix))
+	}
+	for _, suffix := range []string{"网络素材", "公开来源", "素材", "来源"} {
 		value = strings.TrimSpace(strings.TrimSuffix(value, suffix))
 	}
 	return value

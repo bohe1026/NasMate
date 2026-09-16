@@ -68,6 +68,7 @@ func NewHarness() *Harness {
 	h := &Harness{Tools: []ToolSpec{
 		{Name: "search_files", Description: "搜索授权目录中的文件元数据", ReadOnly: true},
 		{Name: "search_index", Description: "查询授权目录中的本地元数据索引", ReadOnly: true},
+		{Name: "search_public_sources", Description: "检索公开网络来源元数据；结果不可信且不代表许可证", ReadOnly: true},
 		{Name: "storage_usage", Description: "读取授权目录和文件系统容量", ReadOnly: true},
 		{Name: "inspect_containers", Description: "读取 Docker 容器状态和受限日志", ReadOnly: true},
 		{Name: "backup_status", Description: "读取备份状态和恢复有效性", ReadOnly: true},
@@ -138,6 +139,8 @@ func localPlan(prompt string) AgentPlan {
 	prompt = strings.TrimSpace(prompt)
 	steps := make([]PlanStep, 0, 2)
 	switch {
+	case strings.Contains(prompt, "网络") || strings.Contains(prompt, "网页") || strings.Contains(prompt, "素材"):
+		steps = append(steps, PlanStep{Tool: "search_public_sources", Reason: "只检索公开来源元数据，后续下载仍需来源和许可证核验"})
 	case strings.Contains(prompt, "下载"):
 		steps = append(steps, PlanStep{Tool: "prepare_download", Reason: "下载需要结构化来源、授权目录和真实用户审批，对话本身不能创建计划"})
 	case strings.Contains(prompt, "索引"):

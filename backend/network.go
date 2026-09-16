@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -20,6 +22,146 @@ type SourceProbe struct {
 	FinalURL    string `json:"finalUrl,omitempty"`
 	StatusCode  int    `json:"statusCode,omitempty"`
 	Error       string `json:"error,omitempty"`
+}
+
+type NetworkSearchResult struct {
+	Title    string `json:"title"`
+	URL      string `json:"url"`
+	Snippet  string `json:"snippet,omitempty"`
+	Provider string `json:"provider"`
+}
+
+type networkSearchRequest struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit"`
+}
+
+type duckSearchTopic struct {
+	Text     string            `json:"Text"`
+	FirstURL string            `json:"FirstURL"`
+	Topics   []duckSearchTopic `json:"Topics"`
+}
+
+type duckSearchResponse struct {
+	Heading       string            `json:"Heading"`
+	AbstractText  string            `json:"AbstractText"`
+	AbstractURL   string            `json:"AbstractURL"`
+	RelatedTopics []duckSearchTopic `json:"RelatedTopics"`
+}
+
+func (s *Server) handleSearchSources(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持的请求方法")
+		return
+	}
+	var req networkSearchRequest
+	if err := decodeJSON(w, r, &req, s.config.MaxBodyBytes); err != nil {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
+		return
+	}
+	query := strings.TrimSpace(req.Query)
+	if length := len([]rune(query)); length < 2 || length > 200 || containsCredential(query) {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "搜索词长度必须在 2 到 200 个字符之间且不能包含凭据")
+		return
+	}
+	limit := req.Limit
+	if limit == 0 {
+		limit = 10
+	}
+	if limit < 1 || limit > 20 {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "limit 必须在 1 到 20 之间")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	items, err := s.searchPublicSources(ctx, query, limit)
+	if err != nil {
+		code := sourceErrorCode(err)
+		status := http.StatusBadGateway
+		if code == "TOOL_TIMEOUT" {
+			status = http.StatusGatewayTimeout
+		} else if code == "USER_CANCELLED" {
+			status = http.StatusRequestTimeout
+		}
+		writeError(w, status, code, "公开网络搜索暂时不可用")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "success", "items": items, "readOnly": true, "untrusted": true, "nextActions": []string{"核实来源、许可证和文件地址后再创建下载计划"}})
+}
+
+func (s *Server) searchPublicSources(ctx context.Context, query string, limit int) ([]NetworkSearchResult, error) {
+	endpoint := s.searchEndpoint
+	if endpoint == "" {
+		endpoint = "https://api.duckduckgo.com/"
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" {
+		return nil, errForbidden
+	}
+	params := parsed.Query()
+	params.Set("q", query)
+	params.Set("format", "json")
+	params.Set("no_html", "1")
+	params.Set("no_redirect", "1")
+	params.Set("skip_disambig", "1")
+	parsed.RawQuery = params.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Accept", "application/json")
+	response, err := s.publicHTTPClient(10 * time.Second).Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, errors.New("search provider returned non-success status")
+	}
+	var payload duckSearchResponse
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
+	if err := decoder.Decode(&payload); err != nil {
+		return nil, errors.New("invalid search provider response")
+	}
+	items := make([]NetworkSearchResult, 0, limit)
+	seen := make(map[string]struct{}, limit)
+	appendResult := func(title, target, snippet string) {
+		if len(items) >= limit || strings.TrimSpace(target) == "" {
+			return
+		}
+		validated, err := parseSourceURL(target)
+		if err != nil {
+			return
+		}
+		host := strings.ToLower(validated.Hostname())
+		if ip := net.ParseIP(host); ip != nil && isPrivateIP(ip) || host == "localhost" || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
+			return
+		}
+		canonical := validated.String()
+		if _, exists := seen[canonical]; exists {
+			return
+		}
+		seen[canonical] = struct{}{}
+		items = append(items, NetworkSearchResult{Title: strings.TrimSpace(title), URL: canonical, Snippet: strings.TrimSpace(snippet), Provider: "DuckDuckGo"})
+	}
+	if payload.AbstractURL != "" {
+		appendResult(payload.Heading, payload.AbstractURL, payload.AbstractText)
+	}
+	var flatten func([]duckSearchTopic)
+	flatten = func(topics []duckSearchTopic) {
+		for _, topic := range topics {
+			appendResult(topic.Text, topic.FirstURL, "")
+			if len(items) >= limit {
+				return
+			}
+			flatten(topic.Topics)
+			if len(items) >= limit {
+				return
+			}
+		}
+	}
+	flatten(payload.RelatedTopics)
+	return items, nil
 }
 
 func (s *Server) handleProbeSources(w http.ResponseWriter, r *http.Request) {

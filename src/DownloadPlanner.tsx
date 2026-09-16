@@ -18,7 +18,7 @@ const errorMessages: Record<string, string> = {
   POLICY_BLOCKED: '来源被安全策略拦截，请使用公开网络地址。',
 }
 
-export function DownloadPlanner({ onCreated }: { onCreated: (plan: DownloadPlan) => void }) {
+export function DownloadPlanner({ onCreated, suggestedURL }: { onCreated: (plan: DownloadPlan) => void; suggestedURL?: string }) {
   const [directory, setDirectory] = useState('')
   const [sources, setSources] = useState<SourceDraft[]>([emptySource(1)])
   const [busy, setBusy] = useState(false)
@@ -26,6 +26,13 @@ export function DownloadPlanner({ onCreated }: { onCreated: (plan: DownloadPlan)
   const nextID = useRef(2)
   const controller = useRef<AbortController | null>(null)
   useEffect(() => () => { controller.current?.abort() }, [])
+  useEffect(() => {
+    if (!suggestedURL) return
+    // The search panel is an external form input; synchronize its selected URL into the draft.
+    // eslint-disable-next-line react/set-state-in-effect
+    setSources((current) => current.map((source, index) => index === 0 ? { ...source, url: suggestedURL } : source))
+    setError('')
+  }, [suggestedURL])
 
   function update(id: number, field: 'url' | 'license' | 'bytes', value: string) {
     setSources((current) => current.map((source) => source.id === id ? { ...source, [field]: value } : source))

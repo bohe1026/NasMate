@@ -98,6 +98,7 @@ ugcli pack --build 2 --arch all --product-series nasync
 - `GET /api/artifacts/{name}`
 - `POST /api/reports/health/generate`
 - `POST /api/network/sources/validate`
+- `POST /api/network/sources/search`
 - `POST /api/network/sources/probe`
 - `POST /api/downloads/prepare`
 - `GET /api/downloads`

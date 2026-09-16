@@ -60,6 +60,7 @@ LLM_API_KEY=                     # Ollama/vLLM 本地端点可留空
 - `GET /api/artifacts/{name}`
 - `POST /api/reports/health/generate`
 - `POST /api/network/sources/validate`
+- `POST /api/network/sources/search`（固定公开搜索提供商；结果是不可信来源元数据）
 - `POST /api/network/sources/probe`
 - `POST /api/downloads/prepare`
 - `GET /api/downloads`
