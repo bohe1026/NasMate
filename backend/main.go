@@ -1670,9 +1670,17 @@ func (s *Server) handleDocker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.URL.Query().Get("container")
-	lines, _ := strconv.Atoi(r.URL.Query().Get("logLines"))
+	lines := 100
+	if raw := r.URL.Query().Get("logLines"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "logLines 必须在 1 到 100 之间")
+			return
+		}
+		lines = parsed
+	}
 	if name != "" {
-		item, err := s.docker.Inspect(r.Context(), name, min(lines, 100))
+		item, err := s.docker.Inspect(r.Context(), name, lines)
 		if errors.Is(err, errNotFound) {
 			writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "容器不存在")
 			return

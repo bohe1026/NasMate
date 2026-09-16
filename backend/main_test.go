@@ -1266,6 +1266,16 @@ func TestDockerAndBackupReportUserCancellation(t *testing.T) {
 	}
 }
 
+func TestDockerLogLinesIsValidated(t *testing.T) {
+	server := testServer()
+	for _, query := range []string{"?container=media-server&logLines=0", "?container=media-server&logLines=-1", "?container=media-server&logLines=101", "?container=media-server&logLines=bad"} {
+		res := request(t, server, http.MethodGet, "/api/docker/containers"+query, "")
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "VALIDATION_FAILED") {
+			t.Fatalf("invalid logLines accepted %s: %d %s", query, res.Code, res.Body.String())
+		}
+	}
+}
+
 type cancelledReadOnlyStorage struct{}
 
 func (cancelledReadOnlyStorage) Usage(ctx context.Context) (StorageUsage, error) {
