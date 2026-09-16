@@ -540,9 +540,14 @@ func TestIndexRebuildPersistsMetadataOnly(t *testing.T) {
 	dataDir := filepath.Join(root, "data")
 	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: dataDir, MaxBodyBytes: 1 << 20})
 	res := request(t, server, http.MethodPost, "/api/index/rebuild", "")
-	if res.Code != http.StatusCreated {
-		t.Fatalf("expected index rebuild, got %d: %s", res.Code, res.Body.String())
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected async index rebuild, got %d: %s", res.Code, res.Body.String())
 	}
+	var job IndexRebuild
+	if err := json.NewDecoder(res.Body).Decode(&job); err != nil {
+		t.Fatal(err)
+	}
+	waitForIndexRebuild(t, server, job.ID, statusCompleted)
 	data, err := os.ReadFile(filepath.Join(dataDir, "metadata-index.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -560,6 +565,94 @@ func TestIndexRebuildPersistsMetadataOnly(t *testing.T) {
 	}
 }
 
+func waitForIndexRebuild(t *testing.T, server *Server, id, want string) IndexRebuild {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		server.store.mu.RLock()
+		job := server.store.indexRebuilds[id]
+		if job != nil && job.Status == want {
+			copy := *job
+			server.store.mu.RUnlock()
+			return copy
+		}
+		server.store.mu.RUnlock()
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("index rebuild %s did not reach %s", id, want)
+	return IndexRebuild{}
+}
+
+type blockingIndexStorage struct {
+	started chan struct{}
+}
+
+func (storage blockingIndexStorage) Usage(context.Context) (StorageUsage, error) { return StorageUsage{}, nil }
+
+func (storage blockingIndexStorage) Search(ctx context.Context, _ FileSearchOptions) ([]FileMetadata, error) {
+	close(storage.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestIndexRebuildCancellationPreservesExistingIndex(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "data")
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	old := []FileMetadata{{Name: "old.txt", Path: filepath.Join(root, "old.txt")}}
+	data, _ := json.Marshal(map[string]any{"generatedAt": time.Now().UTC(), "items": old})
+	if err := os.WriteFile(filepath.Join(dataDir, "metadata-index.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	provider := blockingIndexStorage{started: make(chan struct{})}
+	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: dataDir})
+	server.storage = provider
+	res := request(t, server, http.MethodPost, "/api/index/rebuild", "")
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected async rebuild, got %d: %s", res.Code, res.Body.String())
+	}
+	var job IndexRebuild
+	if err := json.NewDecoder(res.Body).Decode(&job); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("index scan did not start")
+	}
+	res = request(t, server, http.MethodPost, "/api/index/rebuild/"+job.ID+"/cancel", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("cancel failed: %d %s", res.Code, res.Body.String())
+	}
+	waitForIndexRebuild(t, server, job.ID, statusCancelled)
+	got, err := os.ReadFile(filepath.Join(dataDir, "metadata-index.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(data) {
+		t.Fatal("cancelled rebuild replaced the previous index")
+	}
+}
+
+func TestInterruptedIndexRebuildIsMarkedOnRestart(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "data")
+	statePath := filepath.Join(dataDir, "state.json")
+	store := NewStoreWithState(statePath, "")
+	now := time.Now().UTC()
+	store.indexRebuilds["index-restart"] = &IndexRebuild{ID: "index-restart", Status: statusRunning, StartedAt: now, UpdatedAt: now, User: User{ID: "dev-user"}}
+	store.persist()
+	restarted := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: dataDir, StatePath: statePath})
+	restarted.store.mu.RLock()
+	job := *restarted.store.indexRebuilds["index-restart"]
+	restarted.store.mu.RUnlock()
+	if job.Status != statusFailed || job.ErrorCode != "TASK_INTERRUPTED" {
+		t.Fatalf("interrupted index rebuild was not reconciled: %+v", job)
+	}
+}
+
 type cancelledIndexStorage struct{}
 
 func (cancelledIndexStorage) Usage(context.Context) (StorageUsage, error) { return StorageUsage{}, nil }
@@ -571,13 +664,20 @@ func TestIndexRebuildReportsCancellation(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: filepath.Join(root, "data")})
 	server.storage = cancelledIndexStorage{}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	req := httptest.NewRequest(http.MethodPost, "/api/index/rebuild", nil).WithContext(ctx)
-	res := httptest.NewRecorder()
-	server.ServeHTTP(res, req)
-	if res.Code != http.StatusRequestTimeout || !strings.Contains(res.Body.String(), "USER_CANCELLED") {
-		t.Fatalf("cancellation was not reported: %d %s", res.Code, res.Body.String())
+	res := request(t, server, http.MethodPost, "/api/index/rebuild", "")
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected async index rebuild, got %d: %s", res.Code, res.Body.String())
+	}
+	var job IndexRebuild
+	if err := json.NewDecoder(res.Body).Decode(&job); err != nil {
+		t.Fatal(err)
+	}
+	waitForIndexRebuild(t, server, job.ID, statusFailed)
+	server.store.mu.RLock()
+	got := *server.store.indexRebuilds[job.ID]
+	server.store.mu.RUnlock()
+	if got.ErrorCode != "USER_CANCELLED" {
+		t.Fatalf("cancellation was not recorded: %+v", got)
 	}
 }
 
@@ -591,9 +691,14 @@ func TestIndexRebuildCanPersistMoreThanDefaultSearchPage(t *testing.T) {
 	dataDir := filepath.Join(root, "data")
 	server := NewServer(Config{DevMode: true, SharedRoots: []string{root}, DataDir: dataDir})
 	res := request(t, server, http.MethodPost, "/api/index/rebuild", "")
-	if res.Code != http.StatusCreated {
+	if res.Code != http.StatusAccepted {
 		t.Fatalf("index rebuild failed: %d %s", res.Code, res.Body.String())
 	}
+	var job IndexRebuild
+	if err := json.NewDecoder(res.Body).Decode(&job); err != nil {
+		t.Fatal(err)
+	}
+	waitForIndexRebuild(t, server, job.ID, statusCompleted)
 	status := request(t, server, http.MethodGet, "/api/index/status", "")
 	if !strings.Contains(status.Body.String(), `"itemCount":1001`) {
 		t.Fatalf("index was silently limited to default page: %s", status.Body.String())
